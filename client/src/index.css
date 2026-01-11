@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Rubik', system-ui, sans-serif;
+  }
+  
+  body {
+    @apply bg-game-darker text-white;
+    margin: 0;
+    overflow: hidden;
+  }
+  
+  #root {
+    width: 100vw;
+    height: 100vh;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-game-accent text-game-dark font-bold rounded-lg 
+           hover:bg-game-accent-dark transition-colors duration-200
+           active:scale-95 transform;
+  }
+  
+  .btn-secondary {
+    @apply px-6 py-3 bg-game-dark border-2 border-game-accent text-game-accent 
+           font-bold rounded-lg hover:bg-game-accent hover:text-game-dark 
+           transition-colors duration-200;
+  }
+}
