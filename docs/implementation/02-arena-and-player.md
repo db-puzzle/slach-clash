@@ -2,225 +2,368 @@
 
 ## Overview
 
-Create the 3D arena environment and implement the player character with movement controls and fixed follow camera.
+Create the 3D arena environment with procedural terrain, implement the player character with terrain-aware movement controls, and fixed follow camera with terrain tilt.
 
-**Estimated Time:** 4-5 hours  
+**Estimated Time:** 6-8 hours  
 **Prerequisites:** Phase 1 complete
 
 ---
 
-## Task 2.1: Create Arena Ground
+## Task 2.1: Create Terrain Generation System
 
 ### Objective
-Build the arena floor with visual grid for spatial reference.
+Build a procedural heightmap-based terrain generation system using Perlin noise.
 
-### File: `client/src/game/world/Arena.tsx`
+### File: `client/src/game/terrain/TerrainGenerator.ts`
 ```typescript
-import { useRef } from 'react';
-import { Mesh } from 'three';
-import { RigidBody } from '@react-three/rapier';
-import { ARENA_WIDTH, ARENA_DEPTH } from '@/utils/constants';
+import type { HeightmapConfig, TerrainData } from '@/types';
+import { ARENA_WIDTH, ARENA_DEPTH, ROLLING_HILLS_CONFIG } from '@/utils/constants';
 
-export function Arena(): JSX.Element {
-  const groundRef = useRef<Mesh>(null);
+// Perlin noise implementation with permutation table
+const PERMUTATION = [/* 256 values for noise generation */];
+
+function createPermutationTable(seed: number): number[] {
+  // Shuffle permutation based on seed for reproducibility
+  // Double the table to avoid index wrapping
+}
+
+function perlin2D(x: number, y: number, perm: number[]): number {
+  // 2D Perlin noise implementation
+  // Returns value between -1 and 1
+}
+
+export function generateTerrain(config: HeightmapConfig = ROLLING_HILLS_CONFIG): TerrainData {
+  const { resolution, baseFrequency, octaves, persistence, maxHeight, minHeight, smoothness, seed } = config;
+  const actualSeed = seed === 0 ? Math.floor(Math.random() * 10000) : seed;
+  
+  const perm = createPermutationTable(actualSeed);
+  const heightmap = new Float32Array(resolution * resolution);
+  const normalmap = new Float32Array(resolution * resolution * 3);
+  
+  // Generate heightmap using fractal noise (multiple octaves)
+  for (let z = 0; z < resolution; z++) {
+    for (let x = 0; x < resolution; x++) {
+      // Accumulate noise at different frequencies
+      // Scale to height range
+    }
+  }
+  
+  applySmoothing(heightmap, resolution, smoothness);
+  calculateNormals(heightmap, normalmap, resolution, ARENA_WIDTH, ARENA_DEPTH);
+  
+  return { heightmap, normalmap, width: ARENA_WIDTH, depth: ARENA_DEPTH, resolution, config };
+}
+
+// Helper functions for terrain queries
+export function getHeightAt(terrain: TerrainData, x: number, z: number): number;
+export function getNormalAt(terrain: TerrainData, x: number, z: number): { x: number; y: number; z: number };
+export function getSlopeAngle(terrain: TerrainData, x: number, z: number): number;
+```
+
+### File: `client/src/game/terrain/index.ts`
+```typescript
+export { 
+  generateTerrain, 
+  getHeightAt, 
+  getNormalAt, 
+  getSlopeAngle 
+} from './TerrainGenerator';
+```
+
+### Acceptance Criteria
+- [x] Heightmap generated from Perlin noise
+- [x] Normals calculated correctly
+- [x] Height queries work at any position with bilinear interpolation
+- [x] Slope angle calculation works
+- [x] Smoothness parameter affects terrain
+- [x] Seed-based reproducibility for multiplayer sync
+
+---
+
+## Task 2.2: Create Terrain Mesh with Vertex Colors
+
+### Objective
+Build the terrain mesh from heightmap data with physics collider and visual texture splatting using vertex colors.
+
+### File: `client/src/game/world/TerrainMesh.tsx`
+```typescript
+import { useMemo, useRef } from 'react';
+import { PlaneGeometry, Mesh, Color, Float32BufferAttribute } from 'three';
+import { RigidBody } from '@react-three/rapier';
+import type { TerrainData } from '@/types';
+import { ARENA_WIDTH, ARENA_DEPTH, MAX_TRAVERSABLE_SLOPE, SLIDE_THRESHOLD_SLOPE } from '@/utils/constants';
+
+// Color palette for terrain texture splatting
+const COLORS = {
+  grass: new Color('#4a7c3f'),    // Rich green - flat, low areas
+  dirt: new Color('#8b6914'),     // Brown - mid elevation
+  rock: new Color('#6b6b6b'),     // Gray - high elevation or steep
+  snow: new Color('#e8f0ff'),     // Off-white - mountain peaks
+  warning: new Color('#8b4a4a'),  // Red-brown - unclimbable slopes
+};
+
+export function TerrainMesh({ terrain }: { terrain: TerrainData }): React.JSX.Element {
+  const geometry = useMemo(() => {
+    const { heightmap, normalmap, resolution, config } = terrain;
+    const { minHeight, maxHeight } = config;
+    
+    const geo = new PlaneGeometry(ARENA_WIDTH, ARENA_DEPTH, resolution - 1, resolution - 1);
+    geo.rotateX(-Math.PI / 2);
+    
+    const positions = geo.attributes['position'];
+    const colors = new Float32Array(positions.count * 3);
+    
+    for (let i = 0; i < positions.count; i++) {
+      // Displace Y based on heightmap
+      // Calculate vertex color based on:
+      // - Height (grass → dirt → rock → snow)
+      // - Slope angle (steep = more rock, very steep = warning color)
+      // - Noise variation for natural look
+    }
+    
+    geo.setAttribute('color', new Float32BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }, [terrain]);
 
   return (
-    <group>
-      {/* Ground plane with physics */}
-      <RigidBody type="fixed" colliders="cuboid">
-        <mesh 
-          ref={groundRef} 
-          rotation={[-Math.PI / 2, 0, 0]} 
-          position={[0, 0, 0]}
-          receiveShadow
-        >
-          <planeGeometry args={[ARENA_WIDTH, ARENA_DEPTH]} />
-          <meshStandardMaterial 
-            color="#3a5a40" 
-            roughness={0.8}
-          />
-        </mesh>
-      </RigidBody>
-
-      {/* Grid helper for visual reference */}
-      <gridHelper 
-        args={[ARENA_WIDTH, 20, '#2d4a32', '#2d4a32']} 
-        position={[0, 0.01, 0]} 
-      />
-    </group>
+    <RigidBody type="fixed" colliders="trimesh">
+      <mesh geometry={geometry} receiveShadow castShadow>
+        <meshStandardMaterial 
+          vertexColors={true}
+          roughness={0.85}
+          metalness={0.05}
+        />
+      </mesh>
+    </RigidBody>
   );
 }
 ```
 
+### Texture Splatting Logic
+Colors are blended based on:
+
+| Factor | Low Value | High Value |
+|--------|-----------|------------|
+| Height (0-1) | Grass | Snow |
+| Slope (0-90°) | Original color | Rock |
+| Slope (>40°) | Original color | Warning (red-brown) |
+
 ### Acceptance Criteria
-- [ ] Green ground plane visible
-- [ ] Grid lines visible on ground
-- [ ] Ground is 60x60 units
+- [x] Terrain mesh generates from heightmap
+- [x] Terrain shows elevation variation (hills, valleys)
+- [x] Vertex colors show height-based coloring
+- [x] Steep slopes show warning colors (red-brown)
+- [x] Trimesh physics collider works
+- [x] Player can walk on terrain surface
+- [x] Shadows cast and receive properly
 
 ---
 
-## Task 2.2: Create Arena Obstacles
+## Task 2.3: Create Trees
 
 ### Objective
-Add rock and wall obstacles for cover and tactical gameplay.
+Add tree obstacles with trunk-only collision.
+
+### File: `client/src/game/world/Trees.tsx`
+```typescript
+import { RigidBody } from '@react-three/rapier';
+import { TREE_TYPES } from '@/utils/constants';
+
+interface TreeProps {
+  position: [number, number, number];
+  type: 'pine' | 'oak' | 'dead';
+}
+
+function PineTree({ position }: { position: [number, number, number] }): React.JSX.Element {
+  const config = TREE_TYPES['pine'];
+  return (
+    <group position={position}>
+      {/* Trunk - has collision */}
+      <RigidBody type="fixed" colliders="cuboid">
+        <mesh position={[0, config.trunkHeight / 2, 0]} castShadow>
+          <cylinderGeometry args={[config.trunkRadius, config.trunkRadius * 1.2, config.trunkHeight, 8]} />
+          <meshStandardMaterial color="#5d4037" roughness={0.9} />
+        </mesh>
+      </RigidBody>
+      {/* Canopy - visual only, no collision */}
+      <mesh position={[0, config.trunkHeight * 0.7, 0]} castShadow>
+        <coneGeometry args={[config.canopyRadius, config.trunkHeight * 0.8, 8]} />
+        <meshStandardMaterial color="#2e7d32" roughness={0.8} />
+      </mesh>
+    </group>
+  );
+}
+
+// Similar implementations for OakTree and DeadTree
+
+export function Tree({ position, type }: TreeProps): React.JSX.Element {
+  switch (type) {
+    case 'pine': return <PineTree position={position} />;
+    case 'oak': return <OakTree position={position} />;
+    case 'dead': return <DeadTree position={position} />;
+  }
+}
+```
+
+### Tree Types
+
+| Type | Trunk Collision | Canopy | Placement Slope Limit |
+|------|----------------|--------|----------------------|
+| Pine | Cuboid (narrow) | 2 cones | 30° |
+| Oak | Cuboid (wide) | Sphere | 20° |
+| Dead | Hull (with branches) | None | 35° |
+
+### Acceptance Criteria
+- [x] Three tree types render correctly
+- [x] Trunk collision only (canopy passes through)
+- [x] Trees cast shadows
+
+---
+
+## Task 2.4: Create Terrain-Aware Obstacles
+
+### Objective
+Place rocks and trees based on terrain slope.
 
 ### File: `client/src/game/world/Obstacles.tsx`
 ```typescript
+import { useMemo } from 'react';
 import { RigidBody } from '@react-three/rapier';
+import { Tree } from './Trees';
+import type { TerrainData } from '@/types';
+import { getHeightAt, getSlopeAngle } from '@/game/terrain';
+import { OBSTACLE_PLACEMENT, TREE_TYPES, ARENA_WIDTH, ARENA_DEPTH } from '@/utils/constants';
 
-interface ObstacleProps {
-  position: [number, number, number];
-  size: [number, number, number];
-  color?: string;
+function generateObstacles(terrain: TerrainData, seed: number) {
+  const rng = createSeededRandom(seed);
+  const rocks = [];
+  const trees = [];
+  
+  // Generate rocks on flat areas (slope < 10°)
+  for (let i = 0; i < 10; i++) {
+    const x = (rng() - 0.5) * (ARENA_WIDTH - minDistanceFromEdge * 2);
+    const z = (rng() - 0.5) * (ARENA_DEPTH - minDistanceFromEdge * 2);
+    const slope = getSlopeAngle(terrain, x, z);
+    
+    if (slope < maxSlopeForPlacement && isValidPlacement(...)) {
+      const y = getHeightAt(terrain, x, z);
+      rocks.push({ position: [x, y + size * 0.5, z], size });
+    }
+  }
+  
+  // Generate trees based on their maxPlacementSlope
+  for (let i = 0; i < 25; i++) {
+    // Similar logic with tree-specific slope limits
+  }
+  
+  return { rocks, trees };
 }
 
-function Rock({ position, size, color = '#6b705c' }: ObstacleProps): JSX.Element {
-  return (
-    <RigidBody type="fixed" colliders="hull" position={position}>
-      <mesh castShadow receiveShadow>
-        <dodecahedronGeometry args={[size[0]]} />
-        <meshStandardMaterial color={color} roughness={0.9} />
-      </mesh>
-    </RigidBody>
-  );
-}
-
-function Wall({ position, size, color = '#a5a58d' }: ObstacleProps): JSX.Element {
-  return (
-    <RigidBody type="fixed" colliders="cuboid" position={position}>
-      <mesh castShadow receiveShadow>
-        <boxGeometry args={size} />
-        <meshStandardMaterial color={color} roughness={0.7} />
-      </mesh>
-    </RigidBody>
-  );
-}
-
-// Predefined obstacle layout for the arena
-const OBSTACLE_LAYOUT = {
-  rocks: [
-    { position: [-15, 1.5, -10] as [number, number, number], size: [1.5, 1.5, 1.5] as [number, number, number] },
-    { position: [12, 1.2, 8] as [number, number, number], size: [1.2, 1.2, 1.2] as [number, number, number] },
-    { position: [-8, 1.8, 15] as [number, number, number], size: [1.8, 1.8, 1.8] as [number, number, number] },
-    { position: [20, 1, -18] as [number, number, number], size: [1, 1, 1] as [number, number, number] },
-    { position: [-20, 1.4, -5] as [number, number, number], size: [1.4, 1.4, 1.4] as [number, number, number] },
-    { position: [5, 2, 20] as [number, number, number], size: [2, 2, 2] as [number, number, number] },
-    { position: [0, 1.6, 0] as [number, number, number], size: [1.6, 1.6, 1.6] as [number, number, number] }, // Center rock
-  ],
-  walls: [
-    { position: [-10, 1.5, 0] as [number, number, number], size: [1, 3, 8] as [number, number, number] },
-    { position: [10, 1.5, 5] as [number, number, number], size: [8, 3, 1] as [number, number, number] },
-    { position: [0, 1.5, -15] as [number, number, number], size: [12, 3, 1] as [number, number, number] },
-    { position: [-18, 1, 18] as [number, number, number], size: [6, 2, 1] as [number, number, number] },
-    { position: [18, 1, -8] as [number, number, number], size: [1, 2, 6] as [number, number, number] },
-  ],
-};
-
-export function Obstacles(): JSX.Element {
+export function Obstacles({ terrain, seed = 42 }: ObstaclesProps): React.JSX.Element {
+  const { rocks, trees } = useMemo(() => generateObstacles(terrain, seed), [terrain, seed]);
+  
   return (
     <group>
-      {OBSTACLE_LAYOUT.rocks.map((rock, index) => (
-        <Rock 
-          key={`rock-${index}`} 
-          position={rock.position} 
-          size={rock.size} 
-        />
-      ))}
-      {OBSTACLE_LAYOUT.walls.map((wall, index) => (
-        <Wall 
-          key={`wall-${index}`} 
-          position={wall.position} 
-          size={wall.size} 
-        />
-      ))}
+      {rocks.map((rock, i) => <Rock key={`rock-${i}`} {...rock} />)}
+      {trees.map((tree, i) => <Tree key={`tree-${i}`} {...tree} />)}
     </group>
   );
 }
 ```
 
+### Placement Rules (from constants)
+```typescript
+export const OBSTACLE_PLACEMENT = {
+  maxSlopeForPlacement: 10,  // Rocks only on flat terrain
+  minDistanceFromEdge: 5,
+  minDistanceBetween: 8,
+  flatAreaBias: 0.7,
+};
+```
+
 ### Acceptance Criteria
-- [ ] Rocks are visible as dodecahedrons
-- [ ] Walls are visible as boxes
-- [ ] Obstacles scattered across arena
-- [ ] Center rock provides mid-map cover
+- [x] Rocks placed on flat terrain sections
+- [x] Trees placed based on their slope limits
+- [x] Procedural placement is deterministic with seed
+- [x] Minimum spacing between obstacles respected
+- [x] Objects placed at correct terrain height
 
 ---
 
-## Task 2.3: Create Arena Boundaries
+## Task 2.5: Create Arena Boundaries
 
 ### Objective
-Add invisible walls at arena edges to keep players inside.
+Add invisible walls at arena edges that account for terrain height.
 
 ### File: `client/src/game/world/Boundaries.tsx`
 ```typescript
 import { RigidBody } from '@react-three/rapier';
-import { ARENA_WIDTH, ARENA_DEPTH } from '@/utils/constants';
+import { ARENA_WIDTH, ARENA_DEPTH, ROLLING_HILLS_CONFIG } from '@/utils/constants';
 
-export function Boundaries(): JSX.Element {
-  const wallHeight = 5;
-  const wallThickness = 1;
-  const halfWidth = ARENA_WIDTH / 2;
-  const halfDepth = ARENA_DEPTH / 2;
+export function Boundaries(): React.JSX.Element {
+  // Account for terrain height range
+  const terrainHeightRange = ROLLING_HILLS_CONFIG.maxHeight - ROLLING_HILLS_CONFIG.minHeight;
+  const wallHeight = terrainHeightRange + 10;
+  const wallY = (ROLLING_HILLS_CONFIG.minHeight + ROLLING_HILLS_CONFIG.maxHeight) / 2;
 
   return (
     <group>
-      {/* North wall */}
-      <RigidBody type="fixed" colliders="cuboid" position={[0, wallHeight / 2, -halfDepth - wallThickness / 2]}>
+      {/* Four invisible walls at arena edges */}
+      <RigidBody type="fixed" colliders="cuboid" position={[0, wallY, -halfDepth]}>
         <mesh visible={false}>
-          <boxGeometry args={[ARENA_WIDTH + wallThickness * 2, wallHeight, wallThickness]} />
+          <boxGeometry args={[ARENA_WIDTH, wallHeight, 1]} />
         </mesh>
       </RigidBody>
-
-      {/* South wall */}
-      <RigidBody type="fixed" colliders="cuboid" position={[0, wallHeight / 2, halfDepth + wallThickness / 2]}>
-        <mesh visible={false}>
-          <boxGeometry args={[ARENA_WIDTH + wallThickness * 2, wallHeight, wallThickness]} />
-        </mesh>
-      </RigidBody>
-
-      {/* East wall */}
-      <RigidBody type="fixed" colliders="cuboid" position={[halfWidth + wallThickness / 2, wallHeight / 2, 0]}>
-        <mesh visible={false}>
-          <boxGeometry args={[wallThickness, wallHeight, ARENA_DEPTH]} />
-        </mesh>
-      </RigidBody>
-
-      {/* West wall */}
-      <RigidBody type="fixed" colliders="cuboid" position={[-halfWidth - wallThickness / 2, wallHeight / 2, 0]}>
-        <mesh visible={false}>
-          <boxGeometry args={[wallThickness, wallHeight, ARENA_DEPTH]} />
-        </mesh>
-      </RigidBody>
+      {/* ... North, South, East, West walls */}
     </group>
   );
 }
 ```
 
 ### Acceptance Criteria
-- [ ] Invisible walls at all 4 edges
-- [ ] Player cannot leave arena bounds
-- [ ] Walls don't render visually
+- [x] Invisible walls at all 4 edges
+- [x] Walls cover full terrain height range
+- [x] Player cannot leave arena bounds
 
 ---
 
-## Task 2.4: Combine World Components
+## Task 2.6: Combine World Components
 
 ### Objective
-Create a World component that combines all arena elements.
+Create a World component with TerrainContext for sharing terrain data.
 
 ### File: `client/src/game/world/World.tsx`
 ```typescript
-import { Arena } from './Arena';
+import { useMemo, createContext, useContext } from 'react';
+import { TerrainMesh } from './TerrainMesh';
 import { Obstacles } from './Obstacles';
 import { Boundaries } from './Boundaries';
+import { generateTerrain } from '@/game/terrain';
+import { ROLLING_HILLS_CONFIG } from '@/utils/constants';
+import type { TerrainData } from '@/types';
 
-export function World(): JSX.Element {
+// Context for sharing terrain data with Player and Camera
+export const TerrainContext = createContext<TerrainData | null>(null);
+
+export function useTerrainData(): TerrainData | null {
+  return useContext(TerrainContext);
+}
+
+export function World({ seed = 0 }: { seed?: number }): React.JSX.Element {
+  const terrain = useMemo(() => {
+    const config = { ...ROLLING_HILLS_CONFIG, seed };
+    return generateTerrain(config);
+  }, [seed]);
+
   return (
-    <group>
-      <Arena />
-      <Obstacles />
-      <Boundaries />
-    </group>
+    <TerrainContext.Provider value={terrain}>
+      <group>
+        <TerrainMesh terrain={terrain} />
+        <Obstacles terrain={terrain} seed={seed} />
+        <Boundaries />
+      </group>
+    </TerrainContext.Provider>
   );
 }
 ```
@@ -228,18 +371,21 @@ export function World(): JSX.Element {
 ### File: `client/src/game/world/index.ts`
 ```typescript
 export { Arena } from './Arena';
+export { TerrainMesh } from './TerrainMesh';
 export { Obstacles } from './Obstacles';
+export { Tree } from './Trees';
 export { Boundaries } from './Boundaries';
-export { World } from './World';
+export { World, TerrainContext, useTerrainData } from './World';
 ```
 
 ### Acceptance Criteria
-- [ ] World component renders all arena elements
-- [ ] Clean exports from index.ts
+- [x] World component renders terrain and obstacles
+- [x] Terrain data shared via context
+- [x] Seed parameter for reproducible terrain
 
 ---
 
-## Task 2.5: Create Input Handler Hook
+## Task 2.7: Create Input Handler Hook
 
 ### Objective
 Capture keyboard input for player controls.
@@ -250,195 +396,35 @@ import { useEffect, useCallback, useState } from 'react';
 import type { InputState, WeaponSlot } from '@/types';
 
 const WEAPON_KEY_MAP: Record<string, WeaponSlot> = {
-  '1': 'sword',
-  '2': 'spear',
-  '3': 'club',
-  '4': 'bow',
-  '5': 'shield',
-  '6': 'bomb',
+  '1': 'sword', '2': 'spear', '3': 'club',
+  '4': 'bow', '5': 'shield', '6': 'bomb',
 };
 
-interface UseInputReturn {
-  input: InputState;
-  isMouseDown: boolean;
-  isRightMouseDown: boolean;
+export function useInput(): { input: InputState; isMouseDown: boolean; isRightMouseDown: boolean } {
+  // Track WASD, Space, Q/E, 1-6, mouse buttons
+  // Prevent default for game keys
+  // Prevent right-click context menu
 }
-
-export function useInput(): UseInputReturn {
-  const [input, setInput] = useState<InputState>({
-    moveForward: false,
-    moveBackward: false,
-    moveLeft: false,
-    moveRight: false,
-    sprint: false,
-    attack: false,
-    block: false,
-    weaponSlot: null,
-    cycleWeaponNext: false,
-    cycleWeaponPrev: false,
-  });
-
-  const [isMouseDown, setIsMouseDown] = useState(false);
-  const [isRightMouseDown, setIsRightMouseDown] = useState(false);
-
-  const handleKeyDown = useCallback((event: KeyboardEvent): void => {
-    // Prevent default for game keys
-    if (['w', 'a', 's', 'd', ' ', 'q', 'e', '1', '2', '3', '4', '5', '6'].includes(event.key.toLowerCase())) {
-      event.preventDefault();
-    }
-
-    const key = event.key.toLowerCase();
-
-    setInput((prev) => {
-      const updates: Partial<InputState> = {};
-
-      switch (key) {
-        case 'w':
-          updates.moveForward = true;
-          break;
-        case 's':
-          updates.moveBackward = true;
-          break;
-        case 'a':
-          updates.moveLeft = true;
-          break;
-        case 'd':
-          updates.moveRight = true;
-          break;
-        case ' ':
-          updates.sprint = true;
-          break;
-        case 'e':
-          updates.cycleWeaponNext = true;
-          break;
-        case 'q':
-          updates.cycleWeaponPrev = true;
-          break;
-        default:
-          if (WEAPON_KEY_MAP[key]) {
-            updates.weaponSlot = WEAPON_KEY_MAP[key] ?? null;
-          }
-      }
-
-      return { ...prev, ...updates };
-    });
-  }, []);
-
-  const handleKeyUp = useCallback((event: KeyboardEvent): void => {
-    const key = event.key.toLowerCase();
-
-    setInput((prev) => {
-      const updates: Partial<InputState> = {};
-
-      switch (key) {
-        case 'w':
-          updates.moveForward = false;
-          break;
-        case 's':
-          updates.moveBackward = false;
-          break;
-        case 'a':
-          updates.moveLeft = false;
-          break;
-        case 'd':
-          updates.moveRight = false;
-          break;
-        case ' ':
-          updates.sprint = false;
-          break;
-        case 'e':
-          updates.cycleWeaponNext = false;
-          break;
-        case 'q':
-          updates.cycleWeaponPrev = false;
-          break;
-        default:
-          if (WEAPON_KEY_MAP[key]) {
-            updates.weaponSlot = null;
-          }
-      }
-
-      return { ...prev, ...updates };
-    });
-  }, []);
-
-  const handleMouseDown = useCallback((event: MouseEvent): void => {
-    if (event.button === 0) {
-      setIsMouseDown(true);
-      setInput((prev) => ({ ...prev, attack: true }));
-    } else if (event.button === 2) {
-      setIsRightMouseDown(true);
-      setInput((prev) => ({ ...prev, block: true }));
-    }
-  }, []);
-
-  const handleMouseUp = useCallback((event: MouseEvent): void => {
-    if (event.button === 0) {
-      setIsMouseDown(false);
-      setInput((prev) => ({ ...prev, attack: false }));
-    } else if (event.button === 2) {
-      setIsRightMouseDown(false);
-      setInput((prev) => ({ ...prev, block: false }));
-    }
-  }, []);
-
-  const handleContextMenu = useCallback((event: MouseEvent): void => {
-    event.preventDefault(); // Prevent right-click menu
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mouseup', handleMouseUp);
-    window.addEventListener('contextmenu', handleContextMenu);
-
-    return (): void => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('mouseup', handleMouseUp);
-      window.removeEventListener('contextmenu', handleContextMenu);
-    };
-  }, [handleKeyDown, handleKeyUp, handleMouseDown, handleMouseUp, handleContextMenu]);
-
-  return { input, isMouseDown, isRightMouseDown };
-}
-```
-
-### File: `client/src/hooks/index.ts`
-```typescript
-export { useInput } from './useInput';
 ```
 
 ### Acceptance Criteria
-- [ ] WASD keys detected
-- [ ] Space (sprint) detected
-- [ ] Mouse buttons detected
-- [ ] Number keys 1-6 detected
-- [ ] Q/E weapon cycling detected
-- [ ] Right-click menu prevented
+- [x] WASD keys detected
+- [x] Space (sprint) detected
+- [x] Mouse buttons detected (left = attack, right = block)
+- [x] Number keys 1-6 detected for weapon switching
+- [x] Q/E weapon cycling detected
+- [x] Right-click menu prevented
 
 ---
 
-## Task 2.6: Create Player Character Model
+## Task 2.8: Create Player Character Model
 
 ### Objective
 Build a stylized block-based humanoid character.
 
 ### File: `client/src/game/entities/PlayerModel.tsx`
 ```typescript
-import { useRef } from 'react';
-import { Group } from 'three';
-
-interface PlayerModelProps {
-  color: string;
-  isBlocking?: boolean;
-}
-
-export function PlayerModel({ color, isBlocking = false }: PlayerModelProps): JSX.Element {
-  const groupRef = useRef<Group>(null);
-
+export function PlayerModel({ color, isBlocking = false }: PlayerModelProps): React.JSX.Element {
   // Body proportions (stylized, blocky)
   const bodyHeight = 0.8;
   const bodyWidth = 0.5;
@@ -446,289 +432,252 @@ export function PlayerModel({ color, isBlocking = false }: PlayerModelProps): JS
   const limbWidth = 0.15;
 
   return (
-    <group ref={groupRef}>
-      {/* Body */}
+    <group>
+      {/* Body - colored by team */}
       <mesh position={[0, bodyHeight / 2 + 0.3, 0]} castShadow>
         <boxGeometry args={[bodyWidth, bodyHeight, bodyWidth * 0.6]} />
         <meshStandardMaterial color={color} />
       </mesh>
-
-      {/* Head */}
-      <mesh position={[0, bodyHeight + headSize / 2 + 0.3, 0]} castShadow>
-        <boxGeometry args={[headSize, headSize, headSize]} />
-        <meshStandardMaterial color="#f4e4c1" /> {/* Skin tone */}
-      </mesh>
-
-      {/* Left Arm */}
-      <group position={[-(bodyWidth / 2 + limbWidth / 2), bodyHeight / 2 + 0.3, 0]}>
-        <mesh 
-          position={[0, 0, 0]} 
-          rotation={isBlocking ? [0, 0, Math.PI / 4] : [0, 0, 0]}
-          castShadow
-        >
-          <boxGeometry args={[limbWidth, bodyHeight * 0.7, limbWidth]} />
-          <meshStandardMaterial color={color} />
-        </mesh>
-      </group>
-
-      {/* Right Arm */}
-      <group position={[bodyWidth / 2 + limbWidth / 2, bodyHeight / 2 + 0.3, 0]}>
-        <mesh position={[0, 0, 0]} castShadow>
-          <boxGeometry args={[limbWidth, bodyHeight * 0.7, limbWidth]} />
-          <meshStandardMaterial color={color} />
-        </mesh>
-      </group>
-
-      {/* Left Leg */}
-      <mesh position={[-bodyWidth / 4, 0.2, 0]} castShadow>
-        <boxGeometry args={[limbWidth, 0.4, limbWidth]} />
-        <meshStandardMaterial color="#4a4a4a" /> {/* Dark pants */}
-      </mesh>
-
-      {/* Right Leg */}
-      <mesh position={[bodyWidth / 4, 0.2, 0]} castShadow>
-        <boxGeometry args={[limbWidth, 0.4, limbWidth]} />
-        <meshStandardMaterial color="#4a4a4a" />
-      </mesh>
+      {/* Head - skin tone */}
+      {/* Arms - blocking pose when isBlocking */}
+      {/* Legs - dark pants */}
     </group>
   );
 }
 ```
 
 ### Acceptance Criteria
-- [ ] Block-based humanoid visible
-- [ ] Body, head, arms, legs rendered
-- [ ] Color prop affects body/arms
-- [ ] Blocking pose changes arm position
+- [x] Block-based humanoid visible
+- [x] Body, head, arms, legs rendered
+- [x] Color prop affects body/arms
+- [x] Blocking pose changes arm position
 
 ---
 
-## Task 2.7: Create Player Controller
+## Task 2.9: Create Terrain-Aware Player Controller
 
 ### Objective
-Implement player movement with physics and sprint functionality.
+Implement player movement with terrain-aware physics, slope speed modifiers, and sprint.
 
 ### File: `client/src/game/entities/Player.tsx`
 ```typescript
-import { useRef, useEffect } from 'react';
-import { useFrame } from '@react-three/fiber';
-import { RigidBody, CapsuleCollider } from '@react-three/rapier';
-import type { RapierRigidBody } from '@react-three/rapier';
-import { Vector3, Euler } from 'three';
-import { PlayerModel } from './PlayerModel';
-import { useInput } from '@/hooks/useInput';
-import { useGameStore } from '@/stores/gameStore';
-import { WALK_SPEED, SPRINT_SPEED, SPRINT_STAMINA_COST, MAX_STAMINA, STAMINA_RECOVERY_RATE } from '@/utils/constants';
+import { useTerrainData } from '@/game/world';
+import { getHeightAt, getNormalAt, getSlopeAngle } from '@/game/terrain';
+import {
+  WALK_SPEED, SPRINT_SPEED, SPRINT_STAMINA_COST, MAX_STAMINA, STAMINA_RECOVERY_RATE,
+  MAX_TRAVERSABLE_SLOPE, SLIDE_THRESHOLD_SLOPE, SLIDE_SPEED,
+  TERRAIN_SPEED_UPHILL_MIN, TERRAIN_SPEED_DOWNHILL_MAX,
+} from '@/utils/constants';
 
-interface PlayerProps {
-  playerId: string;
-  startPosition: [number, number, number];
-  color: string;
-  isLocal: boolean;
+// Calculate speed modifier based on slope and movement direction
+function calculateTerrainSpeedModifier(slopeAngle, terrainNormal, movementDirection): number {
+  const slopeFactor = terrainNormal.x * movementDirection.x + terrainNormal.z * movementDirection.z;
+  
+  if (slopeFactor > 0) {
+    // Moving uphill - slower
+    return Math.max(TERRAIN_SPEED_UPHILL_MIN, 1 - (slopeAngle / 90) * 0.5);
+  } else {
+    // Moving downhill - faster
+    return Math.min(TERRAIN_SPEED_DOWNHILL_MAX, 1 + (slopeAngle / 90) * 0.4);
+  }
 }
 
-export function Player({ playerId, startPosition, color, isLocal }: PlayerProps): JSX.Element {
-  const rigidBodyRef = useRef<RapierRigidBody>(null);
-  const { input } = useInput();
-  const updatePlayer = useGameStore((state) => state.updatePlayer);
-  const player = useGameStore((state) => state.players.get(playerId));
-
-  // Movement vectors (reused each frame)
-  const moveDirection = useRef(new Vector3());
-  const velocity = useRef(new Vector3());
-
-  // Initialize player in store
-  useEffect(() => {
-    if (isLocal) {
-      useGameStore.getState().addPlayer({
-        id: playerId,
-        name: 'Player',
-        teamId: 0,
-        position: { x: startPosition[0], y: startPosition[1], z: startPosition[2] },
-        rotation: 0,
-        velocity: { x: 0, y: 0, z: 0 },
-        health: 10,
-        stamina: MAX_STAMINA,
-        currentWeaponSlot: 'sword',
-        weapons: {
-          sword: { type: 'sword', durability: 15, maxDurability: 15, isBroken: false },
-          spear: { type: 'spear', durability: 15, maxDurability: 15, isBroken: false },
-          club: { type: 'club', durability: 8, maxDurability: 8, isBroken: false },
-          bow: { type: 'bow', durability: Infinity, maxDurability: Infinity, isBroken: false },
-          shield: { type: 'shield', durability: 30, maxDurability: 30, isBroken: false },
-          bomb: { type: 'bomb', durability: Infinity, maxDurability: Infinity, isBroken: false },
-        },
-        arrows: 20,
-        bombs: 6,
-        isBlocking: false,
-        isSprinting: false,
-        isEliminated: false,
-        lastAttackTime: 0,
-        staggerEndTime: 0,
-      });
-    }
-  }, [playerId, startPosition, isLocal]);
-
+export function Player({ playerId, startPosition, color, isLocal }): React.JSX.Element {
+  const terrain = useTerrainData();
+  
   useFrame((_, delta) => {
-    if (!rigidBodyRef.current || !isLocal || !player) return;
-
-    const rb = rigidBodyRef.current;
-    const stamina = player.stamina;
-
-    // Calculate movement direction from input
-    moveDirection.current.set(0, 0, 0);
+    // Get terrain info at player position
+    const terrainHeight = getHeightAt(terrain, pos.x, pos.z);
+    const terrainNormal = getNormalAt(terrain, pos.x, pos.z);
+    const slopeAngle = getSlopeAngle(terrain, pos.x, pos.z);
     
-    if (input.moveForward) moveDirection.current.z -= 1;
-    if (input.moveBackward) moveDirection.current.z += 1;
-    if (input.moveLeft) moveDirection.current.x -= 1;
-    if (input.moveRight) moveDirection.current.x += 1;
-
-    // Normalize diagonal movement
-    if (moveDirection.current.length() > 0) {
-      moveDirection.current.normalize();
+    // Check slope limits
+    const canTraverse = slopeAngle < MAX_TRAVERSABLE_SLOPE;
+    const shouldSlide = slopeAngle >= SLIDE_THRESHOLD_SLOPE;
+    
+    // Block uphill movement on steep slopes
+    if (!canTraverse && movingUphill) {
+      moveDirection.set(0, 0, 0);
     }
-
-    // Determine speed based on sprint state
-    const canSprint = input.sprint && stamina > 0 && moveDirection.current.length() > 0;
-    const speed = canSprint ? SPRINT_SPEED : WALK_SPEED;
-
-    // Apply movement
-    velocity.current.set(
-      moveDirection.current.x * speed,
-      rb.linvel().y, // Preserve vertical velocity (gravity)
-      moveDirection.current.z * speed
-    );
-
-    rb.setLinvel(velocity.current, true);
-
-    // Calculate rotation to face movement direction
-    let newRotation = player.rotation;
-    if (moveDirection.current.length() > 0) {
-      newRotation = Math.atan2(moveDirection.current.x, moveDirection.current.z);
+    
+    // Apply terrain speed modifier
+    speed *= calculateTerrainSpeedModifier(slopeAngle, terrainNormal, moveDirection);
+    
+    // Apply sliding on very steep slopes
+    if (shouldSlide && isOnGround) {
+      velocity.x += slideDirection.x * SLIDE_SPEED;
+      velocity.z += slideDirection.z * SLIDE_SPEED;
     }
-
-    // Update stamina
-    let newStamina = stamina;
-    if (canSprint) {
-      newStamina = Math.max(0, stamina - SPRINT_STAMINA_COST * delta);
-    } else if (!input.sprint && stamina < MAX_STAMINA) {
-      newStamina = Math.min(MAX_STAMINA, stamina + STAMINA_RECOVERY_RATE * delta);
-    }
-
-    // Get current position
-    const pos = rb.translation();
-
-    // Update store
-    updatePlayer(playerId, {
-      position: { x: pos.x, y: pos.y, z: pos.z },
-      rotation: newRotation,
-      velocity: { x: velocity.current.x, y: velocity.current.y, z: velocity.current.z },
-      stamina: newStamina,
-      isSprinting: canSprint,
-      isBlocking: input.block,
-    });
+    
+    // Update stamina (NOT affected by terrain)
+    // Track fall height for fall damage
   });
 
+  // Spawn at correct terrain height
+  const initialY = getHeightAt(terrain, startPosition[0], startPosition[2]) + 1;
+  
   return (
-    <RigidBody
-      ref={rigidBodyRef}
-      position={startPosition}
-      enabledRotations={[false, false, false]}
-      linearDamping={0.5}
-      mass={1}
-    >
+    <RigidBody position={[startPosition[0], initialY, startPosition[2]]} ...>
       <CapsuleCollider args={[0.5, 0.3]} position={[0, 0.8, 0]} />
-      <group rotation={new Euler(0, player?.rotation ?? 0, 0)}>
-        <PlayerModel color={color} isBlocking={player?.isBlocking} />
-      </group>
+      <PlayerModel color={color} isBlocking={player?.isBlocking} />
     </RigidBody>
   );
 }
 ```
 
+### Movement Speed Modifiers
+
+| Slope Direction | Speed Modifier | Description |
+|-----------------|----------------|-------------|
+| Uphill (steep) | 0.5x–0.7x | Significant slowdown |
+| Uphill (gentle) | 0.8x–0.95x | Slight slowdown |
+| Flat | 1.0x | Normal speed |
+| Downhill (gentle) | 1.05x–1.15x | Slight boost |
+| Downhill (steep) | 1.2x–1.4x | Significant boost |
+
+### Slope Behavior
+
+| Slope Angle | Behavior |
+|-------------|----------|
+| 0-45° | Normal movement with speed modifier |
+| 45-50° | Blocked from climbing, can descend |
+| >50° | Forced sliding downhill |
+
 ### Acceptance Criteria
-- [ ] Player spawns at start position
-- [ ] WASD moves player in correct directions
-- [ ] Space activates sprint (faster movement)
-- [ ] Sprint drains stamina
-- [ ] Stamina recovers when not sprinting
-- [ ] Player rotates to face movement direction
-- [ ] Player collides with obstacles
-- [ ] Player state updates in store
+- [x] Player spawns at terrain height
+- [x] WASD moves player in correct directions
+- [x] Movement speed modified by terrain slope
+- [x] Uphill movement is slower
+- [x] Downhill movement is faster
+- [x] Steep slopes (>45°) block upward movement
+- [x] Very steep slopes (>50°) cause sliding
+- [x] Sprint with stamina drain/recovery
+- [x] Stamina NOT affected by terrain slope
+- [x] Player rotates to face movement direction
+- [x] Fall height tracked for fall damage system
 
 ---
 
-## Task 2.8: Create Fixed Follow Camera
+## Task 2.10: Create Terrain-Following Camera
 
 ### Objective
-Implement a camera that follows behind the player at a fixed angle.
+Implement a camera that follows behind the player with terrain-aware tilt.
 
 ### File: `client/src/game/entities/FollowCamera.tsx`
 ```typescript
-import { useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
-import { Vector3 } from 'three';
-import { useGameStore } from '@/stores/gameStore';
+import { useTerrainData } from '@/game/world';
+import { getNormalAt } from '@/game/terrain';
+import { CAMERA_TILT_INFLUENCE, CAMERA_TILT_SMOOTHNESS, CAMERA_MAX_TILT_ANGLE } from '@/utils/constants';
 
-interface FollowCameraProps {
-  playerId: string;
-  distance?: number;
-  height?: number;
-  smoothness?: number;
-}
-
-export function FollowCamera({ 
-  playerId, 
-  distance = 12, 
-  height = 8, 
-  smoothness = 5 
-}: FollowCameraProps): null {
-  const { camera } = useThree();
-  const player = useGameStore((state) => state.players.get(playerId));
-  
-  const targetPosition = useRef(new Vector3());
-  const currentPosition = useRef(new Vector3());
+export function FollowCamera({ playerId, distance = 12, height = 8, smoothness = 5 }): null {
+  const terrain = useTerrainData();
+  const currentTilt = useRef(0);
 
   useFrame((_, delta) => {
-    if (!player) return;
-
-    const { position, rotation } = player;
-
-    // Calculate camera position behind player
-    const offsetX = Math.sin(rotation) * distance;
-    const offsetZ = Math.cos(rotation) * distance;
-
-    targetPosition.current.set(
-      position.x + offsetX,
-      position.y + height,
-      position.z + offsetZ
-    );
-
+    // Position camera behind player
+    const offsetX = -Math.sin(rotation) * distance;
+    const offsetZ = -Math.cos(rotation) * distance;
+    
     // Smooth camera movement
-    currentPosition.current.lerp(targetPosition.current, smoothness * delta);
-    camera.position.copy(currentPosition.current);
-
-    // Look at player
-    camera.lookAt(position.x, position.y + 1, position.z);
+    currentPosition.lerp(targetPosition, smoothness * delta);
+    
+    // Calculate terrain tilt from ground normal
+    if (terrain) {
+      const terrainNormal = getNormalAt(terrain, position.x, position.z);
+      const targetTilt = Math.asin(terrainNormal.z) * CAMERA_TILT_INFLUENCE;
+      const clampedTilt = clamp(targetTilt, -maxTiltRad, maxTiltRad);
+      currentTilt.current += (clampedTilt - currentTilt.current) * CAMERA_TILT_SMOOTHNESS * delta;
+    }
+    
+    // Apply tilt to camera
+    camera.lookAt(player);
+    euler.x += currentTilt.current;
   });
+}
+```
 
-  return null;
+### Camera Tilt Settings (from constants)
+```typescript
+export const CAMERA_TILT_INFLUENCE = 0.6;    // How much terrain affects tilt
+export const CAMERA_TILT_SMOOTHNESS = 8;     // Interpolation speed
+export const CAMERA_MAX_TILT_ANGLE = 18;     // Maximum degrees
+```
+
+### Acceptance Criteria
+- [x] Camera follows player position
+- [x] Camera stays behind player based on rotation
+- [x] Camera movement is smooth (lerped)
+- [x] Camera tilts with terrain slope
+- [x] Tilt is clamped to maximum angle
+- [x] Tilt interpolation is smooth
+
+---
+
+## Task 2.11: Enhanced Lighting and Fog
+
+### Objective
+Set up visually appealing lighting with shadows and fog for depth perception.
+
+### File: `client/src/App.tsx` (GameScene lighting)
+```typescript
+function GameScene(): React.JSX.Element {
+  return (
+    <>
+      {/* === ENHANCED LIGHTING === */}
+      
+      {/* Ambient light for base illumination */}
+      <ambientLight intensity={0.3} color="#b4c4d4" />
+      
+      {/* Main directional light (sun) with high-res shadows */}
+      <directionalLight
+        position={[30, 50, 20]}
+        intensity={1.2}
+        color="#fff5e6"
+        castShadow
+        shadow-mapSize={[4096, 4096]}
+        shadow-camera-far={150}
+        shadow-camera-left={-50}
+        shadow-camera-right={50}
+        shadow-camera-top={50}
+        shadow-camera-bottom={-50}
+        shadow-bias={-0.0001}
+        shadow-normalBias={0.02}
+      />
+      
+      {/* Fill light from opposite direction */}
+      <directionalLight position={[-20, 30, -15]} intensity={0.3} color="#8ba4c4" />
+      
+      {/* Hemisphere light for sky/ground contrast */}
+      <hemisphereLight args={['#87ceeb', '#3d5a3d', 0.4]} />
+      
+      {/* Point light for warm highlights */}
+      <pointLight position={[0, 20, 0]} intensity={0.2} color="#ffcc88" distance={80} />
+
+      {/* === FOG FOR DEPTH PERCEPTION === */}
+      <fog attach="fog" args={['#a8c4d4', 40, 120]} />
+      
+      {/* Sky background */}
+      <color attach="background" args={['#87b8d8']} />
+      
+      <Physics gravity={[0, -20, 0]}>
+        <World seed={terrainSeed} />
+        <Player ... />
+      </Physics>
+    </>
+  );
 }
 ```
 
 ### Acceptance Criteria
-- [ ] Camera follows player position
-- [ ] Camera stays behind player based on rotation
-- [ ] Camera movement is smooth (lerped)
-- [ ] Camera looks at player center
-- [ ] Height and distance configurable
+- [x] Main sun light with high-resolution shadows
+- [x] Fill light for softer shadows
+- [x] Hemisphere light for ambient contrast
+- [x] Distance fog for depth perception
+- [x] Sky background color
 
 ---
 
-## Task 2.9: Create Player Entity Index
-
-### Objective
-Export all player-related components.
+## Task 2.12: Create Entity Index
 
 ### File: `client/src/game/entities/index.ts`
 ```typescript
@@ -737,167 +686,50 @@ export { PlayerModel } from './PlayerModel';
 export { FollowCamera } from './FollowCamera';
 ```
 
-### Acceptance Criteria
-- [ ] All components exported from index
-
 ---
 
-## Task 2.10: Update App with Game Scene
+## Task 2.13: UI Components
 
 ### Objective
-Integrate the world and player into the main application.
+Add HUD elements for terrain information.
 
-### File: `client/src/App.tsx`
+### File: `client/src/App.tsx` (UI components)
 ```typescript
-import { Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { Physics } from '@react-three/rapier';
-import { World } from '@/game/world';
-import { Player, FollowCamera } from '@/game/entities';
-import { useGameStore } from '@/stores/gameStore';
-
-function GameScene(): JSX.Element {
-  const localPlayerId = useGameStore((state) => state.localPlayerId);
-  
+function TerrainLegend(): React.JSX.Element {
   return (
-    <>
-      {/* Lighting */}
-      <ambientLight intensity={0.4} />
-      <directionalLight 
-        position={[20, 30, 10]} 
-        intensity={1} 
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-        shadow-camera-far={100}
-        shadow-camera-left={-40}
-        shadow-camera-right={40}
-        shadow-camera-top={40}
-        shadow-camera-bottom={-40}
-      />
-      <hemisphereLight args={['#87ceeb', '#3a5a40', 0.3]} />
-
-      {/* Sky color */}
-      <color attach="background" args={['#87ceeb']} />
-
-      <Physics gravity={[0, -20, 0]}>
-        <World />
-        <Player 
-          playerId="local-player" 
-          startPosition={[0, 2, 20]} 
-          color="#4ecdc4"
-          isLocal={true}
-        />
-      </Physics>
-
-      {localPlayerId && (
-        <FollowCamera playerId={localPlayerId} />
-      )}
-    </>
-  );
-}
-
-function LoadingScreen(): JSX.Element {
-  return (
-    <mesh>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshBasicMaterial color="#4ecdc4" />
-    </mesh>
-  );
-}
-
-function HUD(): JSX.Element {
-  const player = useGameStore((state) => 
-    state.localPlayerId ? state.players.get(state.localPlayerId) : null
-  );
-
-  if (!player) return <></>;
-
-  return (
-    <div className="absolute bottom-4 left-4 p-4 bg-game-dark/80 rounded-lg">
-      <div className="text-white font-game">
-        <p>❤️ Health: {player.health}/10</p>
-        <p>⚡ Stamina: {player.stamina.toFixed(1)}/20</p>
-        <p>🗡️ Weapon: {player.currentWeaponSlot}</p>
-        <p>🏃 Sprinting: {player.isSprinting ? 'Yes' : 'No'}</p>
+    <div className="absolute bottom-4 right-4 p-3 bg-game-dark/80 rounded-lg">
+      <p className="text-game-accent font-bold mb-2">Terrain Guide</p>
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-3 rounded" style={{ backgroundColor: '#4a7c3f' }} />
+          <span className="text-white">Grass (flat, easy)</span>
+        </div>
+        {/* Dirt, Rock, Warning, Snow indicators */}
       </div>
     </div>
   );
 }
 
-function ControlsHint(): JSX.Element {
+function TerrainInfo(): React.JSX.Element {
   return (
-    <div className="absolute top-4 right-4 p-4 bg-game-dark/80 rounded-lg text-sm">
-      <p className="text-game-accent font-bold mb-2">Controls</p>
-      <p className="text-white">WASD - Move</p>
-      <p className="text-white">Space - Sprint</p>
-      <p className="text-white">Left Click - Attack</p>
-      <p className="text-white">Right Click - Block</p>
-      <p className="text-white">1-6 - Switch Weapon</p>
+    <div className="absolute top-4 left-4 p-3 bg-game-dark/80 rounded-lg">
+      <p className="text-game-accent font-bold">Rolling Hills Arena</p>
+      <p className="text-white/70">Height range: -4m to 12m</p>
+      <p className="text-yellow-400/80">⚠️ Red-brown areas are too steep to climb!</p>
     </div>
   );
 }
 
-function App(): JSX.Element {
-  // Initialize local player ID
-  useGameStore.getState().setLocalPlayerId('local-player');
-  useGameStore.getState().setPhase('playing');
-
-  return (
-    <div className="w-full h-full">
-      {/* 3D Canvas */}
-      <Canvas
-        shadows
-        camera={{ fov: 60, near: 0.1, far: 200 }}
-        className="absolute inset-0"
-      >
-        <Suspense fallback={<LoadingScreen />}>
-          <GameScene />
-        </Suspense>
-      </Canvas>
-
-      {/* UI Overlay */}
-      <div className="absolute inset-0 pointer-events-none">
-        <HUD />
-        <ControlsHint />
-      </div>
-    </div>
-  );
+function HUD(): React.JSX.Element {
+  // Shows Health, Stamina, Weapon, Sprint status, and Height
 }
-
-export default App;
 ```
 
 ### Acceptance Criteria
-- [ ] Arena and obstacles render
-- [ ] Player character visible
-- [ ] Camera follows player
-- [ ] HUD shows health/stamina
-- [ ] Controls hint visible
-- [ ] Physics works (gravity, collisions)
-
----
-
-## Task 2.11: Test and Verify
-
-### Commands
-```bash
-cd /Users/danilobibancos/slash_clash/client
-npm run types
-npm run lint
-npm run dev
-```
-
-### Manual Testing Checklist
-- [ ] Player moves with WASD
-- [ ] Player sprints with Space
-- [ ] Stamina decreases while sprinting
-- [ ] Stamina recovers when not sprinting
-- [ ] Player rotates to face movement direction
-- [ ] Camera follows smoothly behind player
-- [ ] Player collides with rocks and walls
-- [ ] Player cannot leave arena bounds
-- [ ] HUD updates in real-time
-- [ ] No console errors
+- [x] Terrain legend shows color meanings
+- [x] Terrain info shows height range
+- [x] Warning about steep areas
+- [x] HUD shows player height
 
 ---
 
@@ -905,18 +737,29 @@ npm run dev
 
 Before proceeding to Phase 3, verify:
 
-- [ ] Arena ground with grid visible
-- [ ] Rocks and walls placed around arena
-- [ ] Invisible boundary walls working
-- [ ] Input hook captures all controls
-- [ ] Block-style player model rendered
-- [ ] WASD movement working correctly
-- [ ] Sprint with stamina drain/recovery
-- [ ] Fixed follow camera tracking player
-- [ ] Player collides with environment
-- [ ] HUD displays player stats
-- [ ] `npm run types` passes
-- [ ] `npm run lint` passes
+- [x] Terrain heightmap generation with Perlin noise
+- [x] Terrain mesh renders with vertex color splatting
+- [x] Height-based coloring (grass → dirt → rock → snow)
+- [x] Slope-based coloring (steep = rock, very steep = warning)
+- [x] Terrain physics collider works (trimesh)
+- [x] Trees spawn on appropriate slopes with trunk collision
+- [x] Rocks spawn on flat areas
+- [x] Invisible boundary walls cover terrain height
+- [x] Input hook captures all controls
+- [x] Block-style player model rendered
+- [x] Player spawns at terrain height
+- [x] WASD movement working correctly
+- [x] Slope speed modifiers (uphill slower, downhill faster)
+- [x] Steep slopes block movement (>45°)
+- [x] Very steep slopes cause sliding (>50°)
+- [x] Sprint with stamina drain/recovery
+- [x] Stamina NOT affected by terrain
+- [x] Terrain-following camera with tilt
+- [x] Enhanced lighting with shadows
+- [x] Fog for depth perception
+- [x] Terrain legend and info UI
+- [x] `npm run types` passes
+- [x] `npm run lint` passes
 
 ---
 

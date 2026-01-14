@@ -107,12 +107,75 @@ Display arrow and bomb counts:
 
 ---
 
-## Task 6.5: Combined HUD Component
+## Task 6.5: Terrain Indicators
+
+### File: `client/src/components/hud/TerrainIndicators.tsx`
+
+Display terrain-related warnings and information:
+- Slope warning icon when on steep terrain
+- Fall damage indicator when airborne at dangerous height
+- Minimap showing terrain elevation (optional)
+
+```typescript
+import { useGameStore } from '@/stores/gameStore';
+import { useTerrainData } from '@/game/world';
+import { getSlopeAngle, getHeightAt } from '@/game/terrain';
+import { getFallInfo } from '@/game/systems/FallDamageSystem';
+import { MAX_TRAVERSABLE_SLOPE, FALL_DAMAGE_THRESHOLD } from '@/utils/constants';
+
+export function TerrainIndicators(): JSX.Element {
+  const player = useGameStore((state) => 
+    state.localPlayerId ? state.players.get(state.localPlayerId) : null
+  );
+  const terrain = useTerrainData();
+  
+  if (!player || !terrain) return <></>;
+  
+  const slopeAngle = getSlopeAngle(terrain, player.position.x, player.position.z);
+  const isSteepSlope = slopeAngle > MAX_TRAVERSABLE_SLOPE * 0.8;
+  
+  const { isAirborne, currentFallDistance } = getFallInfo(player.id);
+  const isDangerousFall = isAirborne && currentFallDistance > FALL_DAMAGE_THRESHOLD;
+  
+  return (
+    <div className="absolute top-20 left-4 flex flex-col gap-2">
+      {/* Steep slope warning */}
+      {isSteepSlope && (
+        <div className="flex items-center gap-2 px-3 py-1 bg-game-warning/80 rounded-lg animate-pulse">
+          <span className="text-lg">⚠️</span>
+          <span className="text-sm font-bold text-game-dark">STEEP SLOPE</span>
+        </div>
+      )}
+      
+      {/* Fall damage warning */}
+      {isDangerousFall && (
+        <div className="flex items-center gap-2 px-3 py-1 bg-game-health/80 rounded-lg animate-pulse">
+          <span className="text-lg">⬇️</span>
+          <span className="text-sm font-bold text-white">
+            FALLING! ({currentFallDistance.toFixed(1)}m)
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Acceptance Criteria
+- [ ] Steep slope warning shows near limit
+- [ ] Fall warning shows when airborne above damage threshold
+- [ ] Warnings are visually distinct and noticeable
+
+---
+
+## Task 6.6: Combined HUD Component
 
 ### File: `client/src/components/hud/GameHUD.tsx`
 
-Combine all HUD elements:
+Combine all HUD elements including terrain indicators:
 ```typescript
+import { TerrainIndicators } from './TerrainIndicators';
+
 export function GameHUD(): JSX.Element {
   const player = useGameStore(state => 
     state.localPlayerId ? state.players.get(state.localPlayerId) : null
@@ -127,6 +190,9 @@ export function GameHUD(): JSX.Element {
         <HealthHearts health={player.health} />
         <StaminaBar stamina={player.stamina} maxStamina={20} />
       </div>
+      
+      {/* Terrain Warnings */}
+      <TerrainIndicators />
       
       {/* Bottom Center: Weapons */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
@@ -152,7 +218,7 @@ export function GameHUD(): JSX.Element {
 
 ---
 
-## Task 6.6: Main Menu
+## Task 6.7: Main Menu
 
 ### File: `client/src/components/menus/MainMenu.tsx`
 
@@ -170,7 +236,7 @@ Create the main menu screen:
 
 ---
 
-## Task 6.7: Lobby Screen
+## Task 6.8: Lobby Screen
 
 ### File: `client/src/components/lobby/LobbyScreen.tsx`
 
@@ -197,7 +263,7 @@ Create the pre-match lobby:
 
 ---
 
-## Task 6.8: Results Screen
+## Task 6.9: Results Screen
 
 ### File: `client/src/components/menus/ResultsScreen.tsx`
 
@@ -215,7 +281,7 @@ Post-match summary:
 
 ---
 
-## Task 6.9: Control Hints Overlay
+## Task 6.10: Control Hints Overlay
 
 ### File: `client/src/components/hud/ControlHints.tsx`
 
@@ -233,7 +299,7 @@ Context-sensitive hints:
 
 ---
 
-## Task 6.10: HUD Index Exports
+## Task 6.11: HUD Index Exports
 
 ### File: `client/src/components/hud/index.ts`
 ```typescript
@@ -242,6 +308,7 @@ export { HealthHearts } from './HealthHearts';
 export { StaminaBar } from './StaminaBar';
 export { WeaponDisplay } from './WeaponDisplay';
 export { AmmoCounter } from './AmmoCounter';
+export { TerrainIndicators } from './TerrainIndicators';
 export { ControlHints } from './ControlHints';
 ```
 
@@ -264,6 +331,8 @@ export { LobbyScreen } from './LobbyScreen';
 - [ ] Stamina bar with color states
 - [ ] Weapon display with durability
 - [ ] Ammo counters displayed
+- [ ] Terrain slope warning indicator
+- [ ] Fall damage warning indicator
 - [ ] Combined HUD positioned correctly
 - [ ] Main menu with navigation
 - [ ] Lobby screen functional

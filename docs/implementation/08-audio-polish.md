@@ -2,9 +2,9 @@
 
 ## Overview
 
-Add sound effects, visual polish, and spectator mode.
+Add sound effects, visual polish, spectator mode, and terrain-specific feedback including fall damage effects and environmental sounds.
 
-**Estimated Time:** 4-5 hours  
+**Estimated Time:** 5-6 hours  
 **Prerequisites:** Phase 7 complete
 
 ---
@@ -36,6 +36,12 @@ export function initAudio(): void {
   sounds.hit = new Howl({ src: ['/assets/sounds/hit.mp3'] });
   sounds.block = new Howl({ src: ['/assets/sounds/block.mp3'] });
   sounds.weaponBreak = new Howl({ src: ['/assets/sounds/break.mp3'] });
+  
+  // Terrain/fall sounds
+  sounds.lightLanding = new Howl({ src: ['/assets/sounds/light-landing.mp3'] });
+  sounds.mediumLanding = new Howl({ src: ['/assets/sounds/medium-landing.mp3'] });
+  sounds.heavyLanding = new Howl({ src: ['/assets/sounds/heavy-landing.mp3'] });
+  sounds.slide = new Howl({ src: ['/assets/sounds/slide.mp3'], loop: true });
   
   // UI sounds
   sounds.pickup = new Howl({ src: ['/assets/sounds/pickup.mp3'] });
@@ -241,7 +247,114 @@ export function SpectatorCamera(): JSX.Element {
 
 ---
 
-## Task 8.7: Death Effect
+## Task 8.7: Fall Damage Effects
+
+### Objective
+Add visual and audio feedback for fall damage landings.
+
+### File: `client/src/game/effects/FallEffect.tsx`
+```typescript
+import { useRef, useState, useEffect } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { playSound } from '@/audio/AudioManager';
+
+interface FallEffectProps {
+  position: { x: number; y: number; z: number };
+  damage: number;
+}
+
+export function FallEffect({ position, damage }: FallEffectProps): JSX.Element {
+  const [visible, setVisible] = useState(true);
+  const [scale, setScale] = useState(0);
+  
+  useEffect(() => {
+    // Play landing sound based on damage
+    if (damage >= 3) {
+      playSound('heavyLanding', 1);
+    } else if (damage >= 1) {
+      playSound('mediumLanding', 0.7);
+    } else {
+      playSound('lightLanding', 0.4);
+    }
+    
+    // Fade out effect
+    const timer = setTimeout(() => setVisible(false), 800);
+    return () => clearTimeout(timer);
+  }, [damage]);
+  
+  useFrame((_, delta) => {
+    if (scale < 1) {
+      setScale(Math.min(1, scale + delta * 5));
+    }
+  });
+  
+  if (!visible) return <></>;
+  
+  // Dust ring effect
+  const ringSize = 1 + damage * 0.5;
+  
+  return (
+    <group position={[position.x, position.y + 0.1, position.z]}>
+      {/* Dust cloud particles */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} scale={[scale * ringSize, scale * ringSize, 1]}>
+        <ringGeometry args={[0.5, 1, 16]} />
+        <meshBasicMaterial 
+          color="#8b7355" 
+          transparent 
+          opacity={(1 - scale) * 0.6} 
+        />
+      </mesh>
+      
+      {/* Impact crater (for heavy falls) */}
+      {damage >= 2 && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
+          <circleGeometry args={[0.5 + damage * 0.2, 8]} />
+          <meshBasicMaterial 
+            color="#5a4a3a" 
+            transparent 
+            opacity={(1 - scale) * 0.4} 
+          />
+        </mesh>
+      )}
+    </group>
+  );
+}
+```
+
+### Screen Shake for Local Player
+
+Add screen shake when taking fall damage:
+
+```typescript
+// In FollowCamera.tsx, add shake handling:
+
+const shakeIntensity = useRef(0);
+const shakeDecay = 10; // How fast shake fades
+
+// Trigger shake from fall damage (via event or store)
+export function triggerCameraShake(intensity: number): void {
+  shakeIntensity.current = intensity;
+}
+
+// In useFrame:
+if (shakeIntensity.current > 0) {
+  const shake = shakeIntensity.current;
+  camera.position.x += (Math.random() - 0.5) * shake * 0.1;
+  camera.position.y += (Math.random() - 0.5) * shake * 0.05;
+  shakeIntensity.current = Math.max(0, shake - delta * shakeDecay);
+}
+```
+
+### Acceptance Criteria
+- [ ] Dust effect on landing
+- [ ] Effect size scales with damage
+- [ ] Landing sound plays
+- [ ] Sound intensity based on damage
+- [ ] Screen shake for significant falls
+
+---
+
+## Task 8.8: Death Effect
 
 Simple death effect:
 
@@ -272,7 +385,7 @@ function DeathEffect({ position }: { position: Vector3 }): JSX.Element {
 
 ---
 
-## Task 8.8: Polish Touches
+## Task 8.9: Polish Touches
 
 ### Low Stamina Indicator
 - Slight screen vignette when low stamina
@@ -293,7 +406,7 @@ function DeathEffect({ position }: { position: Vector3 }): JSX.Element {
 
 ---
 
-## Task 8.9: Sound Asset List
+## Task 8.10: Sound Asset List
 
 Required sound files in `/public/assets/sounds/`:
 
@@ -313,6 +426,10 @@ Required sound files in `/public/assets/sounds/`:
 | death.mp3 | Player eliminated |
 | click.mp3 | Menu button |
 | footstep.mp3 | Movement (optional) |
+| light-landing.mp3 | Safe landing from small height |
+| medium-landing.mp3 | Landing with minor fall damage |
+| heavy-landing.mp3 | Landing with significant fall damage |
+| slide.mp3 | Sliding on steep slope (loop) |
 
 Note: Placeholder sounds can be generated or sourced from free sound libraries.
 
@@ -326,6 +443,9 @@ Note: Placeholder sounds can be generated or sourced from free sound libraries.
 - [ ] Damage flash effect
 - [ ] Sprint visual effect
 - [ ] Durability warning
+- [ ] Fall damage visual effects (dust, impact)
+- [ ] Fall landing sounds (tiered by damage)
+- [ ] Screen shake on heavy falls
 - [ ] Spectator mode working
 - [ ] Death effects
 - [ ] Polish touches added
@@ -339,24 +459,29 @@ Note: Placeholder sounds can be generated or sourced from free sound libraries.
 
 After completing Phase 8, you have a working prototype of **Slash and Clash** with:
 
-- ✅ 3D arena with obstacles
-- ✅ Player movement and controls
-- ✅ All 6 weapon types
+- ✅ 3D procedural terrain with hills, valleys, and slopes
+- ✅ Trees, rocks, and natural obstacle placement
+- ✅ Terrain-aware player movement (speed modifiers, slope blocking)
+- ✅ Fall damage from heights
+- ✅ All 6 weapon types with terrain interactions
+- ✅ Arrows and bombs affected by terrain
 - ✅ Combat with blocking and damage
 - ✅ Health, stamina, durability systems
-- ✅ AI bots for single-player testing
-- ✅ Full HUD and UI
-- ✅ Multiplayer networking
-- ✅ Sound effects
+- ✅ Terrain-aware AI bots
+- ✅ Full HUD with terrain warnings
+- ✅ Multiplayer networking with terrain sync
+- ✅ Sound effects including terrain impacts
 - ✅ Spectator mode
 
 ### Next Steps
 
 1. **Playtesting** - Gather feedback on balance and feel
 2. **Bug fixes** - Address issues found in testing
-3. **Performance** - Optimize for 60fps on target hardware
-4. **Assets** - Replace placeholder art with final models
-5. **Phase 2** - Mobile support
+3. **Performance** - Optimize terrain mesh and physics for 60fps
+4. **Additional Maps** - Implement Craggy Peaks, Canyon Arena maps
+5. **Texture Splatting** - Add visual variety to terrain based on slope/height
+6. **Assets** - Replace placeholder art with final models
+7. **Phase 2** - Mobile support
 
 ---
 

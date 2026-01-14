@@ -2,9 +2,9 @@
 
 ## Overview
 
-Implement health, stamina recovery, weapon durability, death, and looting mechanics.
+Implement health, stamina recovery, weapon durability, death, looting mechanics, and fall damage from terrain.
 
-**Estimated Time:** 4-5 hours  
+**Estimated Time:** 5-6 hours  
 **Prerequisites:** Phase 3 complete
 
 ---
@@ -127,7 +127,148 @@ export function isStaggered(player: PlayerState): boolean {
 
 ---
 
-## Task 4.2: Stamina System
+## Task 4.2: Fall Damage System
+
+### Objective
+Implement fall damage when players fall from significant heights on terrain.
+
+### File: `client/src/game/systems/FallDamageSystem.ts`
+```typescript
+import { useGameStore } from '@/stores/gameStore';
+import { applyDamage } from './HealthSystem';
+import { FALL_DAMAGE_THRESHOLD } from '@/utils/constants';
+
+interface FallTracker {
+  highestY: Map<string, number>;
+  isAirborne: Map<string, boolean>;
+}
+
+const tracker: FallTracker = {
+  highestY: new Map(),
+  isAirborne: new Map(),
+};
+
+// Called each frame to track player's highest Y position
+export function updateFallTracking(
+  playerId: string, 
+  currentY: number, 
+  isOnGround: boolean
+): void {
+  const highestY = tracker.highestY.get(playerId) ?? currentY;
+  const wasAirborne = tracker.isAirborne.get(playerId) ?? false;
+  
+  if (!isOnGround) {
+    // Player is airborne - track highest point
+    if (currentY > highestY) {
+      tracker.highestY.set(playerId, currentY);
+    }
+    tracker.isAirborne.set(playerId, true);
+  } else if (wasAirborne) {
+    // Player just landed - calculate fall damage
+    const fallDistance = highestY - currentY;
+    const damage = calculateFallDamage(fallDistance);
+    
+    if (damage > 0) {
+      applyFallDamage(playerId, damage, fallDistance);
+    }
+    
+    // Reset tracking
+    tracker.highestY.set(playerId, currentY);
+    tracker.isAirborne.set(playerId, false);
+  }
+}
+
+// Calculate damage based on fall distance (tiered system)
+export function calculateFallDamage(fallDistance: number): number {
+  if (fallDistance <= 3) return 0;      // Safe landing
+  if (fallDistance <= 6) return 1;      // Minor damage
+  if (fallDistance <= 10) return 2;     // Moderate damage
+  if (fallDistance <= 15) return 3;     // Significant damage
+  return 3 + Math.floor((fallDistance - 15) / 5); // Severe damage (1 per 5 additional units)
+}
+
+// Apply fall damage and effects
+function applyFallDamage(playerId: string, damage: number, fallDistance: number): void {
+  const { players, updatePlayer } = useGameStore.getState();
+  const player = players.get(playerId);
+  
+  if (!player || player.isEliminated) return;
+  
+  // Apply damage
+  applyDamage(playerId, damage, false);
+  
+  // Apply brief stagger on significant falls (damage >= 2)
+  if (damage >= 2) {
+    updatePlayer(playerId, {
+      staggerEndTime: Date.now() + 300, // Brief landing stagger
+    });
+  }
+  
+  // TODO: Trigger visual/audio feedback
+  // - Dust particles at landing position
+  // - Impact sound based on damage
+  // - Screen shake for local player
+}
+
+// Reset tracker for a player (on spawn/respawn)
+export function resetFallTracker(playerId: string): void {
+  tracker.highestY.delete(playerId);
+  tracker.isAirborne.delete(playerId);
+}
+
+// Get current fall info for UI/effects
+export function getFallInfo(playerId: string): { 
+  isAirborne: boolean; 
+  currentFallDistance: number 
+} {
+  const { players } = useGameStore.getState();
+  const player = players.get(playerId);
+  
+  if (!player) {
+    return { isAirborne: false, currentFallDistance: 0 };
+  }
+  
+  const highestY = tracker.highestY.get(playerId) ?? player.position.y;
+  const isAirborne = tracker.isAirborne.get(playerId) ?? false;
+  
+  return {
+    isAirborne,
+    currentFallDistance: isAirborne ? highestY - player.position.y : 0,
+  };
+}
+```
+
+### Integration with Player Controller
+
+Update the Player.tsx to use the fall damage system:
+
+```typescript
+// In Player.tsx useFrame loop, add after terrain height calculation:
+
+import { updateFallTracking } from '@/game/systems/FallDamageSystem';
+
+// ... inside useFrame:
+
+// Check if on ground
+const groundThreshold = 0.5;
+const isOnGround = pos.y - terrainHeight < groundThreshold;
+
+// Track fall for fall damage
+updateFallTracking(playerId, pos.y, isOnGround);
+```
+
+### Acceptance Criteria
+- [ ] Falls under 3 units are safe (no damage)
+- [ ] Falls 3-6 units cause 1 damage
+- [ ] Falls 6-10 units cause 2 damage
+- [ ] Falls 10-15 units cause 3 damage
+- [ ] Falls over 15 units cause 3 + 1 per 5 additional units
+- [ ] Brief stagger on significant falls
+- [ ] Fall tracking resets on landing
+
+---
+
+## Task 4.3: Stamina System
 
 ### Objective
 Implement stamina drain, recovery, and fatigue effects.
@@ -203,7 +344,7 @@ export function canPerformAction(playerId: string, staminaCost: number): boolean
 
 ---
 
-## Task 4.3: Durability System
+## Task 4.4: Durability System
 
 ### Objective
 Track weapon durability and handle weapon breaking.
@@ -318,7 +459,7 @@ export function isLowDurability(durability: number, maxDurability: number): bool
 
 ---
 
-## Task 4.4: Looting System
+## Task 4.5: Looting System
 
 ### Objective
 Allow players to pick up dropped items on contact.
@@ -458,11 +599,17 @@ export function DroppedItems(): JSX.Element {
 
 ---
 
-## Task 4.5: Game Systems Index
+## Task 4.6: Game Systems Index
 
 ### File: `client/src/game/systems/index.ts`
 ```typescript
 export { applyDamage, healPlayer, isStaggered } from './HealthSystem';
+export { 
+  updateFallTracking, 
+  calculateFallDamage, 
+  resetFallTracker,
+  getFallInfo 
+} from './FallDamageSystem';
 export { 
   consumeStamina, 
   updateStaminaRecovery, 
@@ -492,6 +639,11 @@ Before proceeding to Phase 5:
 - [ ] Damage reduces player health
 - [ ] Players eliminated at 0 health
 - [ ] Stagger mechanic works for club
+- [ ] Fall damage calculated from height
+- [ ] Falls under 3 units are safe
+- [ ] Falls 3-15 units cause tiered damage
+- [ ] Falls over 15 units cause severe damage
+- [ ] Brief stagger on significant falls
 - [ ] Stamina consumed by actions
 - [ ] Stamina recovers over time
 - [ ] Recovery delayed after actions

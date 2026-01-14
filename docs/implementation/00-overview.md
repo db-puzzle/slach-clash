@@ -26,7 +26,14 @@ Based on requirements discussion, the following decisions guide implementation:
 - **Art Direction:** Block/stylized low-poly geometric shapes
 - **Character Models:** Capsule-based humanoids with colored limbs
 - **Weapons:** Simple geometric representations
-- **Arena:** Flat ground with primitive obstacle shapes
+- **Arena:** Procedural terrain with rolling hills, trees, and natural obstacles
+
+### Terrain
+- **Type:** Procedural heightmap-based terrain
+- **Initial Map:** Rolling Hills (smooth, gentle elevation changes)
+- **Elevation Range:** -4 to +12 units from base
+- **Features:** Mountains, valleys, slopes with natural cover
+- **Obstacles:** Trees (trunk collision only), rocky outcroppings, cliff faces
 
 ### Camera
 - **Type:** Fixed follow camera
@@ -89,7 +96,8 @@ slash_clash/
 │   │   │   ├── systems/           # Combat, stamina, durability
 │   │   │   ├── physics/           # Collision helpers
 │   │   │   ├── ai/                # Bot behavior
-│   │   │   └── world/             # Arena, obstacles
+│   │   │   ├── terrain/           # Heightmap generation, terrain utils
+│   │   │   └── world/             # Arena, obstacles, trees
 │   │   ├── networking/            # Socket.io client
 │   │   ├── audio/                 # Sound management
 │   │   ├── stores/                # Zustand stores
@@ -203,6 +211,7 @@ interface GameState {
   droppedItems: DroppedItem[];
   matchStartTime: number;
   winningTeam: number | null;
+  terrain: TerrainData;
 }
 
 interface Projectile {
@@ -222,6 +231,50 @@ interface DroppedItem {
   durability?: number;
   quantity?: number;         // For arrows/bombs
   position: Vector3;
+}
+```
+
+### Terrain
+```typescript
+interface HeightmapConfig {
+  resolution: number;        // Grid resolution for height sampling
+  baseFrequency: number;     // Primary noise frequency
+  octaves: number;           // Noise detail layers
+  persistence: number;       // Amplitude falloff per octave
+  maxHeight: number;         // Maximum elevation from base (units)
+  minHeight: number;         // Minimum elevation (valleys, can be negative)
+  smoothness: number;        // Post-processing smoothing factor
+  seed: number;              // Randomization seed (0 = random per match)
+}
+
+interface TerrainData {
+  heightmap: Float32Array;   // Height values
+  normalmap: Float32Array;   // Pre-computed normals
+  width: number;
+  depth: number;
+  resolution: number;
+  config: HeightmapConfig;
+  
+  getHeightAt(x: number, z: number): number;
+  getNormalAt(x: number, z: number): Vector3;
+  getSlopeAt(x: number, z: number): number;
+}
+
+interface TerrainMap {
+  id: string;
+  name: string;
+  style: 'smooth' | 'jagged' | 'mixed';
+  heightmapConfig: HeightmapConfig;
+  obstacles: ObstacleConfig[];
+  spawnPoints: SpawnPoint[];
+}
+
+interface TreeConfig {
+  type: 'pine' | 'oak' | 'dead';
+  trunkRadius: number;
+  trunkHeight: number;
+  canopyRadius: number;
+  maxPlacementSlope: number;
 }
 ```
 
@@ -285,6 +338,17 @@ const SPRINT_SPEED = 8;
 const STAGGER_DURATION = 500;         // Ms
 const BOMB_FUSE_TIME = 5000;          // Ms auto-detonate
 const BOMB_BLAST_RADIUS = 3;          // Units
+
+// Terrain
+const MAX_TRAVERSABLE_SLOPE = 45;     // Degrees
+const SLIDE_THRESHOLD_SLOPE = 50;     // Degrees - player begins sliding
+const SLIDE_SPEED = 4;                // Units per second
+const FALL_DAMAGE_THRESHOLD = 3;      // Units - falls below this are safe
+const TERRAIN_SPEED_UPHILL_MIN = 0.5; // Minimum speed multiplier going uphill
+const TERRAIN_SPEED_DOWNHILL_MAX = 1.4; // Maximum speed multiplier going downhill
+const CAMERA_TILT_INFLUENCE = 0.6;    // How much terrain affects camera tilt
+const CAMERA_TILT_SMOOTHNESS = 8;     // Camera tilt interpolation speed
+const CAMERA_MAX_TILT_ANGLE = 18;     // Degrees
 
 // Weapon stats (see 03-combat-system.md for full table)
 ```

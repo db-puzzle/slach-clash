@@ -362,6 +362,7 @@ mkdir -p game/entities
 mkdir -p game/systems
 mkdir -p game/physics
 mkdir -p game/ai
+mkdir -p game/terrain
 mkdir -p game/world
 mkdir -p networking
 mkdir -p audio
@@ -527,6 +528,59 @@ export interface InputState {
   cycleWeaponNext: boolean;
   cycleWeaponPrev: boolean;
 }
+
+// ============================================
+// TERRAIN TYPES
+// ============================================
+
+export interface HeightmapConfig {
+  resolution: number;
+  baseFrequency: number;
+  octaves: number;
+  persistence: number;
+  maxHeight: number;
+  minHeight: number;
+  smoothness: number;
+  seed: number;
+}
+
+export interface TerrainData {
+  heightmap: Float32Array;
+  normalmap: Float32Array;
+  width: number;
+  depth: number;
+  resolution: number;
+  config: HeightmapConfig;
+}
+
+export interface TerrainMap {
+  id: string;
+  name: string;
+  style: 'smooth' | 'jagged' | 'mixed';
+  heightmapConfig: HeightmapConfig;
+  obstacles: ObstacleConfig[];
+  spawnPoints: SpawnPoint[];
+}
+
+export interface ObstacleConfig {
+  type: 'rock' | 'wall' | 'tree';
+  position: { x: number; z: number };
+  size?: number;
+  treeType?: 'pine' | 'oak' | 'dead';
+}
+
+export interface SpawnPoint {
+  position: { x: number; z: number };
+  teamId: number;
+}
+
+export interface TreeConfig {
+  type: 'pine' | 'oak' | 'dead';
+  trunkRadius: number;
+  trunkHeight: number;
+  canopyRadius: number;
+  maxPlacementSlope: number;
+}
 ```
 
 ### File: `client/src/utils/constants.ts`
@@ -658,6 +712,69 @@ export const WEAPON_STATS: Record<string, WeaponStats> = {
 export const ARENA_WIDTH = 60;
 export const ARENA_DEPTH = 60;
 export const SPAWN_DISTANCE = 25; // Distance from center for team spawns
+
+// ============================================
+// TERRAIN
+// ============================================
+
+export const MAX_TRAVERSABLE_SLOPE = 45; // degrees
+export const SLIDE_THRESHOLD_SLOPE = 50; // degrees
+export const SLIDE_SPEED = 4; // units per second
+
+export const FALL_DAMAGE_THRESHOLD = 3; // units - falls below this are safe
+export const FALL_DAMAGE_PER_TIER = 1; // damage per tier
+
+export const TERRAIN_SPEED_UPHILL_MIN = 0.5;
+export const TERRAIN_SPEED_DOWNHILL_MAX = 1.4;
+
+export const CAMERA_TILT_INFLUENCE = 0.6;
+export const CAMERA_TILT_SMOOTHNESS = 8;
+export const CAMERA_MAX_TILT_ANGLE = 18; // degrees
+
+// Default Rolling Hills terrain configuration
+export const ROLLING_HILLS_CONFIG: import('@/types').HeightmapConfig = {
+  resolution: 128,
+  baseFrequency: 0.02,
+  octaves: 4,
+  persistence: 0.5,
+  maxHeight: 12,
+  minHeight: -4,
+  smoothness: 0.8,
+  seed: 0, // 0 = random seed per match
+};
+
+// Tree configurations
+export const TREE_TYPES: Record<string, import('@/types').TreeConfig> = {
+  pine: {
+    type: 'pine',
+    trunkRadius: 0.4,
+    trunkHeight: 8,
+    canopyRadius: 2,
+    maxPlacementSlope: 30,
+  },
+  oak: {
+    type: 'oak',
+    trunkRadius: 0.6,
+    trunkHeight: 5,
+    canopyRadius: 4,
+    maxPlacementSlope: 20,
+  },
+  dead: {
+    type: 'dead',
+    trunkRadius: 0.3,
+    trunkHeight: 4,
+    canopyRadius: 1.5,
+    maxPlacementSlope: 35,
+  },
+};
+
+// Obstacle placement rules
+export const OBSTACLE_PLACEMENT = {
+  maxSlopeForPlacement: 10,
+  minDistanceFromEdge: 5,
+  minDistanceBetween: 8,
+  flatAreaBias: 0.7,
+};
 ```
 
 ### File: `client/src/stores/gameStore.ts`

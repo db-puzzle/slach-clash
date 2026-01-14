@@ -2,9 +2,9 @@
 
 ## Overview
 
-Implement simple chase-and-attack AI behavior for bot-controlled players.
+Implement simple chase-and-attack AI behavior for bot-controlled players with terrain-aware movement and pathfinding.
 
-**Estimated Time:** 4-5 hours  
+**Estimated Time:** 5-6 hours  
 **Prerequisites:** Phase 4 complete
 
 ---
@@ -233,89 +233,205 @@ function decideFromRetreat(context: AIContext): AIState {
 
 ---
 
-## Task 5.3: AI Movement System
+## Task 5.3: Terrain-Aware AI Movement System
 
 ### Objective
-Implement movement behaviors for each AI state.
+Implement movement behaviors for each AI state with terrain awareness - avoiding steep slopes and considering elevation.
 
 ### File: `client/src/game/ai/AIMovement.ts`
 ```typescript
-import type { PlayerState } from '@/types';
+import type { PlayerState, TerrainData } from '@/types';
 import type { AIContext } from './AIState';
 import { useGameStore } from '@/stores/gameStore';
-import { ARENA_WIDTH, ARENA_DEPTH, WALK_SPEED } from '@/utils/constants';
+import { getSlopeAngle, getHeightAt, getNormalAt } from '@/game/terrain';
+import { 
+  ARENA_WIDTH, 
+  ARENA_DEPTH, 
+  WALK_SPEED, 
+  MAX_TRAVERSABLE_SLOPE,
+  TERRAIN_SPEED_UPHILL_MIN,
+  TERRAIN_SPEED_DOWNHILL_MAX,
+} from '@/utils/constants';
 
 interface MovementResult {
   direction: { x: number; z: number };
   shouldSprint: boolean;
+  speedModifier: number;
 }
 
-export function getAIMovement(context: AIContext): MovementResult {
+export function getAIMovement(context: AIContext, terrain: TerrainData | null): MovementResult {
   const { players } = useGameStore.getState();
   const bot = players.get(context.playerId);
   
   if (!bot || bot.isEliminated) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
+
+  let result: MovementResult;
 
   switch (context.currentState) {
     case 'idle':
-      return { direction: { x: 0, z: 0 }, shouldSprint: false };
+      result = { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
+      break;
     
     case 'patrol':
-      return getPatrolMovement(context, bot);
+      result = getPatrolMovement(context, bot, terrain);
+      break;
     
     case 'chase':
-      return getChaseMovement(context, bot, players);
+      result = getChaseMovement(context, bot, players, terrain);
+      break;
     
     case 'attack':
-      return getAttackMovement(context, bot, players);
+      result = getAttackMovement(context, bot, players);
+      break;
     
     case 'retreat':
-      return getRetreatMovement(context, bot, players);
+      result = getRetreatMovement(context, bot, players, terrain);
+      break;
     
     default:
-      return { direction: { x: 0, z: 0 }, shouldSprint: false };
+      result = { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
+  }
+
+  // Apply terrain-based speed modifier
+  if (terrain && (result.direction.x !== 0 || result.direction.z !== 0)) {
+    result.speedModifier = calculateTerrainSpeedModifier(bot.position, result.direction, terrain);
+    
+    // Check for steep slope and adjust direction
+    result.direction = avoidSteepSlopes(bot.position, result.direction, terrain);
+  }
+
+  return result;
+}
+
+// Calculate speed modifier based on terrain slope
+function calculateTerrainSpeedModifier(
+  position: { x: number; y: number; z: number },
+  direction: { x: number; z: number },
+  terrain: TerrainData
+): number {
+  const normal = getNormalAt(terrain, position.x, position.z);
+  const slopeAngle = getSlopeAngle(terrain, position.x, position.z);
+  
+  // Calculate if moving uphill or downhill
+  const slopeFactor = normal.x * direction.x + normal.z * direction.z;
+  
+  if (slopeFactor > 0) {
+    // Moving uphill
+    return Math.max(TERRAIN_SPEED_UPHILL_MIN, 1 - (slopeAngle / 90) * 0.5);
+  } else {
+    // Moving downhill
+    return Math.min(TERRAIN_SPEED_DOWNHILL_MAX, 1 + (slopeAngle / 90) * 0.4);
   }
 }
 
-function getPatrolMovement(context: AIContext, bot: PlayerState): MovementResult {
-  // Generate patrol target if needed
+// Adjust movement direction to avoid steep slopes
+function avoidSteepSlopes(
+  position: { x: number; y: number; z: number },
+  direction: { x: number; z: number },
+  terrain: TerrainData
+): { x: number; z: number } {
+  // Check slope in the intended direction
+  const lookAhead = 2; // Units to look ahead
+  const targetX = position.x + direction.x * lookAhead;
+  const targetZ = position.z + direction.z * lookAhead;
+  
+  const targetSlope = getSlopeAngle(terrain, targetX, targetZ);
+  const targetHeight = getHeightAt(terrain, targetX, targetZ);
+  const currentHeight = getHeightAt(terrain, position.x, position.z);
+  const heightDiff = targetHeight - currentHeight;
+  
+  // If slope is too steep and going uphill, try to go around
+  if (targetSlope > MAX_TRAVERSABLE_SLOPE && heightDiff > 0) {
+    // Try rotating left and right to find a passable path
+    const angles = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
+    
+    for (const angle of angles) {
+      const rotatedX = direction.x * Math.cos(angle) - direction.z * Math.sin(angle);
+      const rotatedZ = direction.x * Math.sin(angle) + direction.z * Math.cos(angle);
+      
+      const altTargetX = position.x + rotatedX * lookAhead;
+      const altTargetZ = position.z + rotatedZ * lookAhead;
+      const altSlope = getSlopeAngle(terrain, altTargetX, altTargetZ);
+      const altHeight = getHeightAt(terrain, altTargetX, altTargetZ);
+      
+      if (altSlope < MAX_TRAVERSABLE_SLOPE || altHeight <= currentHeight) {
+        return { x: rotatedX, z: rotatedZ };
+      }
+    }
+    
+    // No passable path found, stop movement
+    return { x: 0, z: 0 };
+  }
+  
+  return direction;
+}
+
+function getPatrolMovement(context: AIContext, bot: PlayerState, terrain: TerrainData | null): MovementResult {
+  // Generate patrol target if needed, preferring flat areas
   if (!context.patrolTarget) {
-    context.patrolTarget = {
-      x: (Math.random() - 0.5) * ARENA_WIDTH * 0.8,
-      z: (Math.random() - 0.5) * ARENA_DEPTH * 0.8,
-    };
+    context.patrolTarget = generateValidPatrolTarget(bot.position, terrain);
   }
 
   const dx = context.patrolTarget.x - bot.position.x;
   const dz = context.patrolTarget.z - bot.position.z;
   const distance = Math.sqrt(dx * dx + dz * dz);
 
-  // Pick new target if reached current one
+  // Pick new target if reached current one or stuck
   if (distance < 2) {
     context.patrolTarget = null;
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
 
   return {
     direction: { x: dx / distance, z: dz / distance },
     shouldSprint: false,
+    speedModifier: 1,
+  };
+}
+
+// Generate a patrol target that avoids steep terrain
+function generateValidPatrolTarget(
+  currentPos: { x: number; y: number; z: number },
+  terrain: TerrainData | null
+): { x: number; z: number } {
+  const maxAttempts = 10;
+  
+  for (let i = 0; i < maxAttempts; i++) {
+    const x = (Math.random() - 0.5) * ARENA_WIDTH * 0.8;
+    const z = (Math.random() - 0.5) * ARENA_DEPTH * 0.8;
+    
+    if (terrain) {
+      const slope = getSlopeAngle(terrain, x, z);
+      if (slope < MAX_TRAVERSABLE_SLOPE * 0.8) {
+        return { x, z };
+      }
+    } else {
+      return { x, z };
+    }
+  }
+  
+  // Fallback to random position
+  return {
+    x: (Math.random() - 0.5) * ARENA_WIDTH * 0.8,
+    z: (Math.random() - 0.5) * ARENA_DEPTH * 0.8,
   };
 }
 
 function getChaseMovement(
   context: AIContext, 
   bot: PlayerState, 
-  players: Map<string, PlayerState>
+  players: Map<string, PlayerState>,
+  terrain: TerrainData | null
 ): MovementResult {
   if (!context.targetId) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
 
   const target = players.get(context.targetId);
   if (!target) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
 
   const dx = target.position.x - bot.position.x;
@@ -323,12 +439,13 @@ function getChaseMovement(
   const distance = Math.sqrt(dx * dx + dz * dz);
 
   if (distance < 0.1) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
 
   return {
     direction: { x: dx / distance, z: dz / distance },
     shouldSprint: bot.stamina > 5, // Sprint if has stamina
+    speedModifier: 1,
   };
 }
 
@@ -338,12 +455,12 @@ function getAttackMovement(
   players: Map<string, PlayerState>
 ): MovementResult {
   if (!context.targetId) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
 
   const target = players.get(context.targetId);
   if (!target) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: false };
+    return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
   }
 
   const dx = target.position.x - bot.position.x;
@@ -355,16 +472,18 @@ function getAttackMovement(
     return {
       direction: { x: dx / distance * 0.3, z: dz / distance * 0.3 },
       shouldSprint: false,
+      speedModifier: 1,
     };
   }
 
-  return { direction: { x: 0, z: 0 }, shouldSprint: false };
+  return { direction: { x: 0, z: 0 }, shouldSprint: false, speedModifier: 1 };
 }
 
 function getRetreatMovement(
   context: AIContext, 
   bot: PlayerState, 
-  players: Map<string, PlayerState>
+  players: Map<string, PlayerState>,
+  terrain: TerrainData | null
 ): MovementResult {
   if (!context.targetId) {
     // Retreat to center if no target
@@ -373,32 +492,34 @@ function getRetreatMovement(
     const distance = Math.sqrt(dx * dx + dz * dz);
     
     if (distance < 0.1) {
-      return { direction: { x: 0, z: 0 }, shouldSprint: true };
+      return { direction: { x: 0, z: 0 }, shouldSprint: true, speedModifier: 1 };
     }
     
     return {
       direction: { x: dx / distance, z: dz / distance },
       shouldSprint: true,
+      speedModifier: 1,
     };
   }
 
   const target = players.get(context.targetId);
   if (!target) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: true };
+    return { direction: { x: 0, z: 0 }, shouldSprint: true, speedModifier: 1 };
   }
 
-  // Move away from target
+  // Move away from target, preferring downhill for speed
   const dx = bot.position.x - target.position.x;
   const dz = bot.position.z - target.position.z;
   const distance = Math.sqrt(dx * dx + dz * dz);
 
   if (distance < 0.1) {
-    return { direction: { x: 0, z: 0 }, shouldSprint: true };
+    return { direction: { x: 0, z: 0 }, shouldSprint: true, speedModifier: 1 };
   }
 
   return {
     direction: { x: dx / distance, z: dz / distance },
     shouldSprint: true,
+    speedModifier: 1,
   };
 }
 
@@ -410,10 +531,14 @@ export function calculateRotation(direction: { x: number; z: number }): number {
 
 ### Acceptance Criteria
 - [ ] Idle: no movement
-- [ ] Patrol: moves to random points
+- [ ] Patrol: moves to random traversable points
+- [ ] Patrol targets avoid steep terrain
 - [ ] Chase: moves toward target
+- [ ] Chase adjusts path around steep slopes
 - [ ] Attack: slight adjustment to stay in range
 - [ ] Retreat: moves away from target
+- [ ] AI movement speed affected by terrain slope
+- [ ] AI avoids untraversable slopes
 
 ---
 
@@ -571,6 +696,9 @@ Create the main AI controller that runs bot behavior.
 import { useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGameStore } from '@/stores/gameStore';
+import { useTerrainData } from '@/game/world';
+import { getHeightAt } from '@/game/terrain';
+import { updateFallTracking } from '@/game/systems/FallDamageSystem';
 import type { AIContext } from './AIState';
 import { createAIContext, updateAIState } from './AIState';
 import { getAIMovement, calculateRotation } from './AIMovement';
@@ -584,6 +712,7 @@ interface AIControllerProps {
 export function AIController({ playerId }: AIControllerProps): null {
   const context = useRef<AIContext>(createAIContext(playerId));
   const updatePlayer = useGameStore((state) => state.updatePlayer);
+  const terrain = useTerrainData();
 
   useFrame((_, delta) => {
     const players = useGameStore.getState().players;
@@ -598,11 +727,12 @@ export function AIController({ playerId }: AIControllerProps): null {
       context.current.lastStateChange = Date.now();
     }
 
-    // Get movement
-    const movement = getAIMovement(context.current);
+    // Get movement with terrain awareness
+    const movement = getAIMovement(context.current, terrain);
     
-    // Calculate velocity
-    const speed = movement.shouldSprint ? SPRINT_SPEED : WALK_SPEED;
+    // Calculate velocity with terrain speed modifier
+    const baseSpeed = movement.shouldSprint ? SPRINT_SPEED : WALK_SPEED;
+    const speed = baseSpeed * movement.speedModifier;
     const velocity = {
       x: movement.direction.x * speed,
       y: 0,
@@ -610,11 +740,22 @@ export function AIController({ playerId }: AIControllerProps): null {
     };
 
     // Calculate new position
-    const newPosition = {
-      x: bot.position.x + velocity.x * delta,
-      y: bot.position.y,
-      z: bot.position.z + velocity.z * delta,
-    };
+    let newX = bot.position.x + velocity.x * delta;
+    let newZ = bot.position.z + velocity.z * delta;
+    
+    // Get terrain height at new position
+    let newY = bot.position.y;
+    if (terrain) {
+      const terrainHeight = getHeightAt(terrain, newX, newZ);
+      newY = terrainHeight + 0.8; // Bot capsule offset
+      
+      // Check if on ground for fall tracking
+      const groundThreshold = 0.5;
+      const isOnGround = bot.position.y - terrainHeight < groundThreshold;
+      updateFallTracking(playerId, bot.position.y, isOnGround);
+    }
+
+    const newPosition = { x: newX, y: newY, z: newZ };
 
     // Calculate rotation
     let rotation = bot.rotation;
@@ -625,7 +766,7 @@ export function AIController({ playerId }: AIControllerProps): null {
     // Get combat actions
     const combat = getAICombatAction(context.current);
 
-    // Update stamina
+    // Update stamina (not affected by terrain)
     let stamina = bot.stamina;
     if (movement.shouldSprint) {
       stamina = Math.max(0, stamina - 2 * delta);
@@ -762,12 +903,16 @@ Before proceeding to Phase 6:
 - [ ] AI state machine implemented
 - [ ] State transitions work correctly
 - [ ] Bots patrol when no enemies
+- [ ] Patrol targets avoid steep terrain
 - [ ] Bots chase detected enemies
+- [ ] Bots path around steep slopes
+- [ ] Bot movement speed affected by terrain
 - [ ] Bots attack in melee range
 - [ ] Bots retreat when low health
 - [ ] Bots select weapons appropriately
 - [ ] Bots occasionally block
-- [ ] Bot spawning works
+- [ ] Bot spawning works at terrain height
+- [ ] Bots take fall damage
 - [ ] Multiple bots work simultaneously
 - [ ] `npm run types` passes
 - [ ] `npm run lint` passes

@@ -148,3 +148,56 @@ export interface InputState {
     cycleWeaponNext: boolean;
     cycleWeaponPrev: boolean;
 }
+
+// ============================================
+// TERRAIN TYPES
+// ============================================
+
+export interface HeightmapConfig {
+    resolution: number;
+    baseFrequency: number;
+    octaves: number;
+    persistence: number;
+    maxHeight: number;
+    minHeight: number;
+    smoothness: number;
+    seed: number;
+}
+
+export interface TerrainData {
+    heightmap: Float32Array;
+    normalmap: Float32Array;
+    width: number;
+    depth: number;
+    resolution: number;
+    config: HeightmapConfig;
+}
+
+export interface TerrainMap {
+    id: string;
+    name: string;
+    style: 'smooth' | 'jagged' | 'mixed';
+    heightmapConfig: HeightmapConfig;
+    obstacles: ObstacleConfig[];
+    spawnPoints: SpawnPoint[];
+}
+
+export interface ObstacleConfig {
+    type: 'rock' | 'wall' | 'tree';
+    position: { x: number; z: number };
+    size?: number;
+    treeType?: 'pine' | 'oak' | 'dead';
+}
+
+export interface SpawnPoint {
+    position: { x: number; z: number };
+    teamId: number;
+}
+
+export interface TreeConfig {
+    type: 'pine' | 'oak' | 'dead';
+    trunkRadius: number;
+    trunkHeight: number;
+    canopyRadius: number;
+    maxPlacementSlope: number;
+}

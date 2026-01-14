@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement all 6 weapon types with attacks, blocking, damage, and weapon-specific mechanics.
+Implement all 6 weapon types with attacks, blocking, damage, weapon-specific mechanics, and terrain-aware projectile physics.
 
 **Estimated Time:** 6-8 hours  
 **Prerequisites:** Phase 2 complete
@@ -482,10 +482,10 @@ if (input.attack && canAttack) {
 
 ---
 
-## Task 3.5: Implement Projectile System
+## Task 3.5: Implement Terrain-Aware Projectile System
 
 ### Objective
-Create arrows and thrown bombs with physics.
+Create arrows and thrown bombs with terrain-aware physics, elevation effects, and line-of-sight blocking.
 
 ### File: `client/src/game/entities/Projectile.tsx`
 ```typescript
@@ -494,6 +494,8 @@ import { useFrame } from '@react-three/fiber';
 import { RigidBody } from '@react-three/rapier';
 import type { RapierRigidBody } from '@react-three/rapier';
 import { useGameStore } from '@/stores/gameStore';
+import { useTerrainData } from '@/game/world';
+import { getHeightAt, getNormalAt, getSlopeAngle } from '@/game/terrain';
 import { checkArrowHit, checkBombHit } from '@/game/systems/HitDetection';
 import { ARROW_SPEED, BOMB_FUSE_TIME, BOMB_BLAST_RADIUS } from '@/utils/constants';
 
@@ -509,9 +511,11 @@ export function Arrow({ id, ownerId, startPosition, direction }: ArrowProps): JS
   const removeProjectile = useGameStore((state) => state.removeProjectile);
   const players = useGameStore((state) => state.players);
   const updatePlayer = useGameStore((state) => state.updatePlayer);
+  const terrain = useTerrainData();
 
   useEffect(() => {
     // Set initial velocity
+    // Arrows fired from height travel further due to natural arc
     if (rigidBodyRef.current) {
       rigidBodyRef.current.setLinvel({
         x: direction[0] * ARROW_SPEED,
@@ -533,8 +537,15 @@ export function Arrow({ id, ownerId, startPosition, direction }: ArrowProps): JS
 
     const pos = rigidBodyRef.current.translation();
     
-    // Ground collision
-    if (pos.y < 0.1) {
+    // Terrain collision - check if below terrain height
+    if (terrain) {
+      const terrainHeight = getHeightAt(terrain, pos.x, pos.z);
+      if (pos.y < terrainHeight + 0.1) {
+        removeProjectile(id);
+        return;
+      }
+    } else if (pos.y < 0.1) {
+      // Fallback for flat ground
       removeProjectile(id);
       return;
     }
@@ -584,21 +595,30 @@ interface BombProps {
   direction: [number, number, number];
 }
 
+// Bomb physics constants for terrain interaction
+const BOMB_ROLL_FRICTION = 0.95;
+const BOMB_MAX_ROLL_SPEED = 8;
+
 export function Bomb({ id, ownerId, startPosition, direction }: BombProps): JSX.Element {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
   const removeProjectile = useGameStore((state) => state.removeProjectile);
   const players = useGameStore((state) => state.players);
   const updatePlayer = useGameStore((state) => state.updatePlayer);
+  const terrain = useTerrainData();
   const createdAt = useRef(Date.now());
+  const hasLanded = useRef(false);
 
   const detonate = (): void => {
     if (!rigidBodyRef.current) return;
 
     const pos = rigidBodyRef.current.translation();
-    const hits = checkBombHit(
+    
+    // Check line-of-sight to each player through terrain
+    const hits = checkBombHitWithTerrain(
       { x: pos.x, y: pos.y, z: pos.z },
       Array.from(players.values()),
-      BOMB_BLAST_RADIUS
+      BOMB_BLAST_RADIUS,
+      terrain
     );
 
     for (const hit of hits) {
@@ -629,6 +649,55 @@ export function Bomb({ id, ownerId, startPosition, direction }: BombProps): JSX.
     return (): void => { clearTimeout(timeout); };
   }, []);
 
+  // Handle bomb rolling on terrain
+  useFrame((_, delta) => {
+    if (!rigidBodyRef.current || !terrain) return;
+    
+    const pos = rigidBodyRef.current.translation();
+    const vel = rigidBodyRef.current.linvel();
+    const terrainHeight = getHeightAt(terrain, pos.x, pos.z);
+    
+    // Check if bomb has landed on terrain
+    const groundThreshold = 0.3;
+    if (pos.y - terrainHeight < groundThreshold && vel.y <= 0) {
+      if (!hasLanded.current) {
+        hasLanded.current = true;
+      }
+      
+      // Get terrain slope and apply rolling physics
+      const normal = getNormalAt(terrain, pos.x, pos.z);
+      const slopeAngle = getSlopeAngle(terrain, pos.x, pos.z);
+      
+      if (slopeAngle > 5) {
+        // Calculate roll direction (downhill)
+        const rollX = -normal.x;
+        const rollZ = -normal.z;
+        const rollMagnitude = Math.min(slopeAngle / 45, 1) * BOMB_MAX_ROLL_SPEED;
+        
+        // Apply rolling force
+        const newVelX = vel.x * BOMB_ROLL_FRICTION + rollX * rollMagnitude * delta * 10;
+        const newVelZ = vel.z * BOMB_ROLL_FRICTION + rollZ * rollMagnitude * delta * 10;
+        
+        // Clamp max speed
+        const speed = Math.sqrt(newVelX * newVelX + newVelZ * newVelZ);
+        if (speed > BOMB_MAX_ROLL_SPEED) {
+          const scale = BOMB_MAX_ROLL_SPEED / speed;
+          rigidBodyRef.current.setLinvel({
+            x: newVelX * scale,
+            y: vel.y,
+            z: newVelZ * scale,
+          }, true);
+        } else {
+          rigidBodyRef.current.setLinvel({
+            x: newVelX,
+            y: vel.y,
+            z: newVelZ,
+          }, true);
+        }
+      }
+    }
+  });
+
   return (
     <RigidBody
       ref={rigidBodyRef}
@@ -645,16 +714,72 @@ export function Bomb({ id, ownerId, startPosition, direction }: BombProps): JSX.
     </RigidBody>
   );
 }
+
+// Helper function for bomb hit detection with terrain line-of-sight
+function checkBombHitWithTerrain(
+  bombPos: { x: number; y: number; z: number },
+  players: PlayerState[],
+  blastRadius: number,
+  terrain: TerrainData | null
+): HitResult[] {
+  const results = checkBombHit(bombPos, players, blastRadius);
+  
+  if (!terrain) return results;
+  
+  // Filter out hits blocked by terrain
+  return results.filter((hit) => {
+    const player = players.find(p => p.id === hit.targetId);
+    if (!player) return false;
+    
+    return isInExplosionLineOfSight(
+      bombPos,
+      { x: player.position.x, y: player.position.y + 1, z: player.position.z },
+      terrain
+    );
+  });
+}
+
+// Check if explosion can reach target through terrain
+function isInExplosionLineOfSight(
+  origin: { x: number; y: number; z: number },
+  target: { x: number; y: number; z: number },
+  terrain: TerrainData
+): boolean {
+  const steps = 10;
+  const dx = (target.x - origin.x) / steps;
+  const dy = (target.y - origin.y) / steps;
+  const dz = (target.z - origin.z) / steps;
+  
+  for (let i = 1; i < steps; i++) {
+    const checkX = origin.x + dx * i;
+    const checkY = origin.y + dy * i;
+    const checkZ = origin.z + dz * i;
+    
+    const terrainHeight = getHeightAt(terrain, checkX, checkZ);
+    
+    // If the ray is below terrain at any point, it's blocked
+    if (checkY < terrainHeight) {
+      return false;
+    }
+  }
+  
+  return true;
+}
 ```
 
 ### Acceptance Criteria
 - [ ] Arrows travel in direction fired
 - [ ] Arrows affected by gravity
+- [ ] Arrows from height travel further (natural physics)
+- [ ] Arrows collide with terrain surface
 - [ ] Arrows hit and damage players
 - [ ] Bombs thrown in arc
 - [ ] Bombs bounce on landing
+- [ ] Bombs roll downhill after landing
+- [ ] Roll speed based on terrain slope
 - [ ] Bombs auto-detonate after 5 seconds
-- [ ] Bomb blast damages players in radius
+- [ ] Bomb blast blocked by terrain (line-of-sight)
+- [ ] Terrain provides natural cover from explosions
 
 ---
 
@@ -707,7 +832,11 @@ Before proceeding to Phase 4:
 - [ ] Blocking reduces/negates damage
 - [ ] Club causes stagger effect
 - [ ] Arrows fire and hit targets
+- [ ] Arrows collide with terrain
+- [ ] Arrows from elevation travel further
 - [ ] Bombs throw, bounce, and explode
+- [ ] Bombs roll downhill after landing
+- [ ] Bomb blast blocked by terrain (line-of-sight)
 - [ ] Bomb area damage applies correctly
 - [ ] Weapon switching with Q/E works
 - [ ] Direct weapon selection with 1-6 works

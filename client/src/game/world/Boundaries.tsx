@@ -1,11 +1,16 @@
 import { RigidBody } from '@react-three/rapier';
-import { ARENA_WIDTH, ARENA_DEPTH } from '@/utils/constants';
+import { ARENA_WIDTH, ARENA_DEPTH, ROLLING_HILLS_CONFIG } from '@/utils/constants';
 
 export function Boundaries(): React.JSX.Element {
-  const wallHeight = 5;
+  // Account for terrain height range (minHeight to maxHeight plus some margin)
+  const terrainHeightRange = ROLLING_HILLS_CONFIG.maxHeight - ROLLING_HILLS_CONFIG.minHeight;
+  const wallHeight = terrainHeightRange + 10; // Extra margin above terrain
   const wallThickness = 1;
   const halfWidth = ARENA_WIDTH / 2;
   const halfDepth = ARENA_DEPTH / 2;
+  
+  // Center walls vertically to cover terrain range
+  const wallY = (ROLLING_HILLS_CONFIG.minHeight + ROLLING_HILLS_CONFIG.maxHeight) / 2;
 
   return (
     <group>
@@ -13,7 +18,7 @@ export function Boundaries(): React.JSX.Element {
       <RigidBody
         type="fixed"
         colliders="cuboid"
-        position={[0, wallHeight / 2, -halfDepth - wallThickness / 2]}
+        position={[0, wallY, -halfDepth - wallThickness / 2]}
       >
         <mesh visible={false}>
           <boxGeometry
@@ -26,7 +31,7 @@ export function Boundaries(): React.JSX.Element {
       <RigidBody
         type="fixed"
         colliders="cuboid"
-        position={[0, wallHeight / 2, halfDepth + wallThickness / 2]}
+        position={[0, wallY, halfDepth + wallThickness / 2]}
       >
         <mesh visible={false}>
           <boxGeometry
@@ -39,7 +44,7 @@ export function Boundaries(): React.JSX.Element {
       <RigidBody
         type="fixed"
         colliders="cuboid"
-        position={[halfWidth + wallThickness / 2, wallHeight / 2, 0]}
+        position={[halfWidth + wallThickness / 2, wallY, 0]}
       >
         <mesh visible={false}>
           <boxGeometry args={[wallThickness, wallHeight, ARENA_DEPTH]} />
@@ -50,7 +55,7 @@ export function Boundaries(): React.JSX.Element {
       <RigidBody
         type="fixed"
         colliders="cuboid"
-        position={[-halfWidth - wallThickness / 2, wallHeight / 2, 0]}
+        position={[-halfWidth - wallThickness / 2, wallY, 0]}
       >
         <mesh visible={false}>
           <boxGeometry args={[wallThickness, wallHeight, ARENA_DEPTH]} />

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement multiplayer functionality with peer-to-peer architecture.
+Implement multiplayer functionality with peer-to-peer architecture, including terrain synchronization to ensure all players have identical terrain.
 
 **Estimated Time:** 8-10 hours  
 **Prerequisites:** Phase 6 complete
@@ -242,11 +242,83 @@ socket.on('gameState', (state) => {
 
 ---
 
-## Task 7.6: State Serialization
+## Task 7.6: Terrain Synchronization
+
+### Objective
+Ensure all players in a match have identical terrain by synchronizing the terrain seed.
+
+### File: `client/src/networking/terrainSync.ts`
+```typescript
+import type { HeightmapConfig } from '@/types';
+import { ROLLING_HILLS_CONFIG } from '@/utils/constants';
+
+interface TerrainSyncData {
+  seed: number;
+  mapId: string;
+  configOverrides?: Partial<HeightmapConfig>;
+}
+
+// Host generates terrain seed at match start
+export function generateTerrainSeed(): number {
+  return Math.floor(Math.random() * 2147483647);
+}
+
+// Include terrain in lobby/match start message
+export function getTerrainSyncData(seed: number, mapId: string = 'rolling_hills'): TerrainSyncData {
+  return {
+    seed,
+    mapId,
+    configOverrides: undefined,
+  };
+}
+
+// Client receives terrain data and generates matching terrain
+export function applyTerrainSync(syncData: TerrainSyncData): HeightmapConfig {
+  const baseConfig = ROLLING_HILLS_CONFIG; // Could select based on mapId in future
+  return {
+    ...baseConfig,
+    seed: syncData.seed,
+    ...(syncData.configOverrides ?? {}),
+  };
+}
+```
+
+### Integration with Lobby Server
+
+Update server to broadcast terrain seed:
+
+```typescript
+// In server/src/index.ts
+
+socket.on('startMatch', (lobbyId: string) => {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby) return;
+  
+  // Generate terrain seed for this match
+  const terrainSeed = Math.floor(Math.random() * 2147483647);
+  
+  // Broadcast match start with terrain data
+  io.to(lobbyId).emit('matchStart', {
+    terrainSeed,
+    mapId: 'rolling_hills',
+    players: Array.from(lobby.players.values()),
+  });
+});
+```
+
+### Acceptance Criteria
+- [ ] Host generates terrain seed at match start
+- [ ] Seed broadcast to all players
+- [ ] All clients generate identical terrain
+- [ ] Terrain sync data included in match start
+
+---
+
+## Task 7.7: State Serialization
 
 ### File: `client/src/networking/serialization.ts`
 
-Efficient state encoding:
+Efficient state encoding (terrain data is NOT serialized each frame - only the seed is shared at match start):
 
 ```typescript
 interface NetworkGameState {
@@ -255,6 +327,10 @@ interface NetworkGameState {
   projectiles: NetworkProjectile[];
   droppedItems: NetworkDroppedItem[];
 }
+
+// Note: Terrain is NOT included in frame-by-frame sync
+// All clients generate terrain locally from the shared seed
+// This saves significant bandwidth
 
 export function serializeGameState(): NetworkGameState {
   const state = useGameStore.getState();
@@ -276,10 +352,11 @@ export function applyGameState(netState: NetworkGameState): void {
 - [ ] State serializes efficiently
 - [ ] Deserialization works
 - [ ] All game objects included
+- [ ] Terrain NOT included (generated from seed)
 
 ---
 
-## Task 7.7: Input Prediction (Client-Side)
+## Task 7.8: Input Prediction (Client-Side)
 
 ### File: `client/src/networking/prediction.ts`
 
@@ -307,7 +384,7 @@ export function reconcileWithServer(serverState: PlayerState): void {
 
 ---
 
-## Task 7.8: Lobby Integration
+## Task 7.9: Lobby Integration
 
 Update lobby screen to use networking:
 
@@ -324,19 +401,21 @@ Update lobby screen to use networking:
 
 ---
 
-## Task 7.9: Match Flow
+## Task 7.10: Match Flow
 
 ### Complete multiplayer match flow:
 
 1. Host creates lobby
 2. Players join and ready up
 3. Host starts match
-4. Server signals all clients to begin
-5. Host runs game loop
-6. Clients render and send inputs
-7. Match ends when one team eliminated
-8. Server records result
-9. All clients return to lobby/menu
+4. Server generates terrain seed and broadcasts to all clients
+5. All clients generate identical terrain from seed
+6. Server signals all clients to begin
+7. Host runs game loop
+8. Clients render and send inputs
+9. Match ends when one team eliminated
+10. Server records result
+11. All clients return to lobby/menu
 
 ### Acceptance Criteria
 - [ ] Full match flow works
@@ -351,6 +430,9 @@ Update lobby screen to use networking:
 - [ ] Socket.io server running
 - [ ] Lobby create/join works
 - [ ] Ready system works
+- [ ] Terrain seed generated at match start
+- [ ] Terrain seed broadcast to all clients
+- [ ] All clients generate identical terrain
 - [ ] Match start synchronized
 - [ ] Game state broadcasts
 - [ ] Client input sending
