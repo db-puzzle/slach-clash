@@ -144,15 +144,34 @@ export const CAMERA_TILT_INFLUENCE = 0.6;
 export const CAMERA_TILT_SMOOTHNESS = 8;
 export const CAMERA_MAX_TILT_ANGLE = 18; // degrees
 
+// Orbit camera settings
+export const CAMERA_DEFAULT_DISTANCE = 12;
+export const CAMERA_DEFAULT_HEIGHT = 8;
+export const CAMERA_MIN_DISTANCE = 8;
+export const CAMERA_MAX_DISTANCE = 20;
+export const CAMERA_SENSITIVITY = 0.003; // Radians per pixel
+export const CAMERA_MIN_PITCH = -0.5; // Radians (looking up limit)
+export const CAMERA_MAX_PITCH = 1.2; // Radians (looking down limit)
+export const CAMERA_SMOOTHNESS = 8; // Interpolation factor
+
+// Target lock settings
+export const TARGET_LOCK_RANGE = 15; // Units
+export const TARGET_LOCK_ANGLE = Math.PI / 3; // 60 degrees cone in front of player
+export const TARGET_LOCK_BREAK_RANGE = 20; // Distance at which lock breaks
+
+// Quick shield settings
+export const QUICK_SHIELD_STAMINA_COST = 0.5; // Per second
+export const QUICK_SHIELD_SPEED_MULTIPLIER = 0.7; // 30% speed reduction
+
 // Default Rolling Hills terrain configuration
 export const ROLLING_HILLS_CONFIG: import('@/types').HeightmapConfig = {
   resolution: 256,
   baseFrequency: 0.015,
   octaves: 5,
-  persistence: 0.55,
+  persistence: 0.45,
   maxHeight: 28,
   minHeight: -10,
-  smoothness: 0.5,
+  smoothness: 0.85,
   seed: 0, // 0 = random seed per match
 };
 
@@ -188,3 +207,29 @@ export const OBSTACLE_PLACEMENT = {
   minDistanceBetween: 12,
   flatAreaBias: 0.7,
 };
+
+// ============================================
+// OCCLUSION TRANSPARENCY
+// ============================================
+
+// How transparent occluding objects become (0 = invisible, 1 = fully opaque)
+export const OCCLUSION_TRANSPARENCY = 0.3;
+
+// Speed of fade in/out transition (higher = faster)
+export const OCCLUSION_FADE_SPEED = 5;
+
+// Y offset from player position for raycast target (aim at chest level)
+export const OCCLUSION_RAY_OFFSET = 1.0;
+
+// ============================================
+// FLYBY CAMERA
+// ============================================
+
+export const FLYBY_ORBIT_DURATION = 4500; // 4.5 seconds for circular orbit (50% slower than original)
+export const FLYBY_TRANSITION_DURATION = 1500; // 1.5 seconds to transition to player camera
+
+// Circular flyby path configuration
+export const FLYBY_ORBIT_RADIUS = 55; // Distance from arena center
+export const FLYBY_ORBIT_HEIGHT = 35; // Camera height during flyby
+export const FLYBY_LOOK_AT_HEIGHT = 5; // Height of the point camera looks at (arena center)
+// Note: Start/end angles are calculated dynamically based on each player's spawn position

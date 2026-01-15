@@ -6,8 +6,10 @@ import { Vector3, Euler } from 'three';
 import { PlayerModel } from './PlayerModel';
 import { useInput } from '@/hooks/useInput';
 import { useGameStore } from '@/stores/gameStore';
+import { useCameraStore } from '@/stores/cameraStore';
 import { useTerrainData } from '@/game/world';
 import { getHeightAt, getNormalAt, getSlopeAngle } from '@/game/terrain';
+import { updateFallTracking } from '@/game/systems';
 import {
   WALK_SPEED,
   SPRINT_SPEED,
@@ -19,15 +21,16 @@ import {
   SLIDE_SPEED,
   TERRAIN_SPEED_UPHILL_MIN,
   TERRAIN_SPEED_DOWNHILL_MAX,
+  QUICK_SHIELD_STAMINA_COST,
+  QUICK_SHIELD_SPEED_MULTIPLIER,
 } from '@/utils/constants';
 
-// Rotation speed in radians per second (adjust for smoother/faster turning)
-const ROTATION_SPEED = 8;
+// Rotation speed in radians per second
+const ROTATION_SPEED = 10;
 
 // Helper function to get the shortest angle difference (handles wraparound)
 function angleDifference(from: number, to: number): number {
   let diff = to - from;
-  // Normalize to [-π, π]
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
   return diff;
@@ -46,16 +49,13 @@ function calculateTerrainSpeedModifier(
   movementDirection: { x: number; z: number }
 ): number {
   if (movementDirection.x === 0 && movementDirection.z === 0) return 1;
-  
-  // Calculate if moving uphill or downhill
-  // Dot product of terrain normal XZ with movement direction
-  const slopeFactor = terrainNormal.x * movementDirection.x + terrainNormal.z * movementDirection.z;
-  
-  if (slopeFactor > 0) {
-    // Moving uphill (against the slope normal direction)
+
+  const slopeFactor =
+    terrainNormal.x * movementDirection.x + terrainNormal.z * movementDirection.z;
+
+  if (slopeFactor < 0) {
     return Math.max(TERRAIN_SPEED_UPHILL_MIN, 1 - (slopeAngle / 90) * 0.5);
   } else {
-    // Moving downhill (with the slope)
     return Math.min(TERRAIN_SPEED_DOWNHILL_MAX, 1 + (slopeAngle / 90) * 0.4);
   }
 }
@@ -77,29 +77,32 @@ export function Player({
   const { input } = useInput();
   const updatePlayer = useGameStore((state) => state.updatePlayer);
   const player = useGameStore((state) => state.players.get(playerId));
+  const players = useGameStore((state) => state.players);
   const terrain = useTerrainData();
+
+  // Camera state for camera-relative movement
+  const cameraYaw = useCameraStore((state) => state.yaw);
+  const isLocked = useCameraStore((state) => state.isLocked);
+  const lockedTargetId = useCameraStore((state) => state.lockedTargetId);
 
   // Movement vectors (reused each frame)
   const moveDirection = useRef(new Vector3());
   const velocity = useRef(new Vector3());
-  
-  // Fall tracking for fall damage
-  const highestY = useRef(startPosition[1]);
-  const isAirborne = useRef(false);
 
   // Initialize player in store
   useEffect(() => {
     if (isLocal) {
-      // Calculate actual start height from terrain
-      const terrainHeight = terrain ? getHeightAt(terrain, startPosition[0], startPosition[2]) : 0;
-      const startY = terrainHeight + 1; // 1 unit above terrain
-      
+      const terrainHeight = terrain
+        ? getHeightAt(terrain, startPosition[0], startPosition[2])
+        : 0;
+      const startY = terrainHeight + 1;
+
       useGameStore.getState().addPlayer({
         id: playerId,
         name: 'Player',
         teamId: 0,
         position: { x: startPosition[0], y: startY, z: startPosition[2] },
-        rotation: Math.PI, // Start facing toward arena center (-Z direction)
+        rotation: Math.PI,
         velocity: { x: 0, y: 0, z: 0 },
         health: 10,
         stamina: MAX_STAMINA,
@@ -155,49 +158,56 @@ export function Player({
     const pos = rb.translation();
     const stamina = player.stamina;
     const currentRotation = player.rotation;
-    
+
     // Get terrain info at current position
     let terrainHeight = 0;
     let terrainNormal = { x: 0, y: 1, z: 0 };
     let slopeAngle = 0;
-    
+
     if (terrain) {
       terrainHeight = getHeightAt(terrain, pos.x, pos.z);
       terrainNormal = getNormalAt(terrain, pos.x, pos.z);
       slopeAngle = getSlopeAngle(terrain, pos.x, pos.z);
     }
-    
+
     // Check if on ground
     const groundThreshold = 0.5;
     const isOnGround = pos.y - terrainHeight < groundThreshold;
-    
-    // Track fall height
-    if (!isOnGround) {
-      if (pos.y > highestY.current) {
-        highestY.current = pos.y;
+
+    // Track fall and apply fall damage when landing
+    updateFallTracking(playerId, pos.y, isOnGround);
+
+    // Calculate input direction
+    const inputForward = (input.moveForward ? 1 : 0) - (input.moveBackward ? 1 : 0);
+    const inputRight = (input.moveRight ? 1 : 0) - (input.moveLeft ? 1 : 0);
+
+    // Determine movement reference angle
+    let movementReferenceAngle: number;
+
+    if (isLocked && lockedTargetId) {
+      // When locked on, movement is relative to the direction toward target
+      const target = players.get(lockedTargetId);
+      if (target) {
+        const dirX = target.position.x - pos.x;
+        const dirZ = target.position.z - pos.z;
+        movementReferenceAngle = Math.atan2(dirX, dirZ);
+      } else {
+        movementReferenceAngle = cameraYaw;
       }
-      isAirborne.current = true;
-    } else if (isAirborne.current) {
-      // Just landed - fall damage handled in game systems (Phase 4)
-      isAirborne.current = false;
-      highestY.current = pos.y;
+    } else {
+      // Free camera mode - movement is relative to camera yaw
+      movementReferenceAngle = cameraYaw;
     }
 
-    // Calculate input direction in local/camera space
-    // Forward = positive, Right = positive (from player's perspective)
-    const inputForward = (input.moveForward ? 1 : 0) - (input.moveBackward ? 1 : 0);
-    const inputRight = (input.moveLeft ? 1 : 0) - (input.moveRight ? 1 : 0);
+    // Transform input to world space using camera/target direction
+    const cosR = Math.cos(movementReferenceAngle);
+    const sinR = Math.sin(movementReferenceAngle);
 
-    // Transform from local space to world space using player's current rotation
-    // This makes controls relative to where the player is facing
-    const cosR = Math.cos(currentRotation);
-    const sinR = Math.sin(currentRotation);
-
-    // Rotate input by player's facing direction
-    // Local forward (0,0,1) -> World (sin(θ), 0, cos(θ))
-    // Local right (1,0,0) -> World (cos(θ), 0, -sin(θ))
-    const worldX = inputRight * cosR + inputForward * sinR;
-    const worldZ = -inputRight * sinR + inputForward * cosR;
+    // Camera forward direction: (sin(yaw), 0, cos(yaw))
+    // Camera right direction (screen-relative): (-cos(yaw), 0, sin(yaw))
+    // This ensures D moves right on screen, A moves left on screen
+    const worldX = -inputRight * cosR + inputForward * sinR;
+    const worldZ = inputRight * sinR + inputForward * cosR;
 
     moveDirection.current.set(worldX, 0, worldZ);
 
@@ -205,45 +215,77 @@ export function Player({
     if (moveDirection.current.length() > 0) {
       moveDirection.current.normalize();
     }
-    
+
     // Check for steep slopes
     const canTraverse = slopeAngle < MAX_TRAVERSABLE_SLOPE;
     const shouldSlide = slopeAngle >= SLIDE_THRESHOLD_SLOPE;
-    
-    // Block movement up steep slopes
+
+    // On steep slopes, allow movement along the slope (perpendicular to uphill direction)
+    // but block direct uphill movement
     if (!canTraverse && moveDirection.current.length() > 0 && terrain) {
-      // Check if trying to move uphill
-      const movingUphill = terrainNormal.x * moveDirection.current.x + terrainNormal.z * moveDirection.current.z > 0;
+      const slopeDot =
+        terrainNormal.x * moveDirection.current.x + terrainNormal.z * moveDirection.current.z;
+      const movingUphill = slopeDot < 0;
+      
       if (movingUphill) {
-        moveDirection.current.set(0, 0, 0); // Block uphill movement
+        // Project movement onto the slope contour (perpendicular to slope gradient)
+        // This allows sideways movement along steep slopes
+        const slopeGradientX = terrainNormal.x;
+        const slopeGradientZ = terrainNormal.z;
+        const gradientLengthSq = slopeGradientX * slopeGradientX + slopeGradientZ * slopeGradientZ;
+        
+        if (gradientLengthSq > 0.001) {
+          // Remove the uphill component from movement
+          const projection = slopeDot / gradientLengthSq;
+          moveDirection.current.x -= slopeGradientX * projection;
+          moveDirection.current.z -= slopeGradientZ * projection;
+          
+          // Re-normalize if there's remaining movement
+          const remainingLength = moveDirection.current.length();
+          if (remainingLength > 0.1) {
+            moveDirection.current.normalize();
+          } else {
+            moveDirection.current.set(0, 0, 0);
+          }
+        } else {
+          moveDirection.current.set(0, 0, 0);
+        }
       }
     }
 
-    // Determine speed based on sprint state and terrain
+    // Check if quick shield is active and available
+    const shieldWeapon = player.weapons.shield;
+    const canQuickShield = input.quickShield && shieldWeapon && !shieldWeapon.isBroken;
+    const isBlocking = input.block || canQuickShield;
+
+    // Determine speed based on sprint state, blocking, and terrain
     const canSprint =
-      input.sprint && stamina > 0 && moveDirection.current.length() > 0;
+      input.sprint && stamina > 0 && moveDirection.current.length() > 0 && !isBlocking;
     let speed = canSprint ? SPRINT_SPEED : WALK_SPEED;
-    
+
+    // Apply speed reduction when blocking/shielding
+    if (isBlocking) {
+      speed *= QUICK_SHIELD_SPEED_MULTIPLIER;
+    }
+
     // Apply terrain speed modifier
     if (terrain && moveDirection.current.length() > 0) {
-      const terrainModifier = calculateTerrainSpeedModifier(
-        slopeAngle,
-        terrainNormal,
-        { x: moveDirection.current.x, z: moveDirection.current.z }
-      );
+      const terrainModifier = calculateTerrainSpeedModifier(slopeAngle, terrainNormal, {
+        x: moveDirection.current.x,
+        z: moveDirection.current.z,
+      });
       speed *= terrainModifier;
     }
 
     // Calculate velocity
     velocity.current.set(
       moveDirection.current.x * speed,
-      rb.linvel().y, // Preserve vertical velocity (gravity)
+      rb.linvel().y,
       moveDirection.current.z * speed
     );
-    
+
     // Apply sliding on steep slopes
     if (shouldSlide && isOnGround && terrain) {
-      // Slide in direction of slope (opposite of normal's XZ)
       const slideX = -terrainNormal.x;
       const slideZ = -terrainNormal.z;
       const slideLength = Math.sqrt(slideX * slideX + slideZ * slideZ);
@@ -255,24 +297,35 @@ export function Player({
 
     rb.setLinvel(velocity.current, true);
 
-    // Calculate rotation to face movement direction with smooth interpolation
-    // Only rotate when moving forward or sideways, not when moving purely backward
+    // Calculate player rotation
     let newRotation = currentRotation;
-    const isMovingForward = inputForward > 0;
-    const isMovingSideways = inputRight !== 0;
 
-    if (moveDirection.current.length() > 0 && (isMovingForward || isMovingSideways)) {
+    if (isLocked && lockedTargetId) {
+      // When locked on, always face the target
+      const target = players.get(lockedTargetId);
+      if (target) {
+        const dirX = target.position.x - pos.x;
+        const dirZ = target.position.z - pos.z;
+        const targetRotation = Math.atan2(dirX, dirZ);
+        newRotation = lerpAngle(currentRotation, targetRotation, ROTATION_SPEED * delta);
+      }
+    } else if (moveDirection.current.length() > 0) {
+      // Free camera mode - face movement direction
       const targetRotation = Math.atan2(moveDirection.current.x, moveDirection.current.z);
-      // Smoothly interpolate toward target rotation
       newRotation = lerpAngle(currentRotation, targetRotation, ROTATION_SPEED * delta);
     }
-    // When moving purely backward, keep current rotation (walk backward while facing forward)
 
-    // Update stamina (NOT affected by terrain - as per spec)
+    // Update stamina
     let newStamina = stamina;
+
     if (canSprint) {
+      // Sprinting consumes stamina
       newStamina = Math.max(0, stamina - SPRINT_STAMINA_COST * delta);
-    } else if (!input.sprint && stamina < MAX_STAMINA) {
+    } else if (canQuickShield) {
+      // Quick shield consumes stamina
+      newStamina = Math.max(0, stamina - QUICK_SHIELD_STAMINA_COST * delta);
+    } else if (stamina < MAX_STAMINA) {
+      // Recover stamina when not sprinting or quick shielding
       newStamina = Math.min(MAX_STAMINA, stamina + STAMINA_RECOVERY_RATE * delta);
     }
 
@@ -287,13 +340,13 @@ export function Player({
       },
       stamina: newStamina,
       isSprinting: canSprint,
-      isBlocking: input.block,
+      isBlocking,
     });
   });
 
   // Calculate initial position based on terrain
-  const initialY = terrain 
-    ? getHeightAt(terrain, startPosition[0], startPosition[2]) + 1 
+  const initialY = terrain
+    ? getHeightAt(terrain, startPosition[0], startPosition[2]) + 1
     : startPosition[1];
 
   return (

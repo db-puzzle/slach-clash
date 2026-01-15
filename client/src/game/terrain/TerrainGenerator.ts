@@ -87,18 +87,18 @@ function perlin2D(x: number, y: number, perm: number[]): number {
 // ============================================
 
 // Number of plateau levels
-const PLATEAU_LEVELS = 5;
+const PLATEAU_LEVELS = 4;
 // How strongly to snap to plateaus (0 = no plateaus, 1 = hard snap)
-const PLATEAU_STRENGTH = 0.75;
+const PLATEAU_STRENGTH = 0.45;
 // Smooth transition zone between plateaus (in normalized height units)
-const PLATEAU_TRANSITION = 0.06;
+const PLATEAU_TRANSITION = 0.25;
 
 // Low elevation bias - higher values = more low elevation terrain
 // 0.5 = no bias, < 0.5 = more high terrain, > 0.5 = more low terrain
 const LOW_ELEVATION_BIAS = 0.7;
 
 // Ramp configuration
-const RAMP_WIDTH = 8;       // Width of ramps in world units
+const RAMP_WIDTH = 24;       // Width of ramps in world units
 
 // Guaranteed features configuration
 const GUARANTEED_MID_PLATEAUS = 3;   // Number of guaranteed mid-elevation areas
@@ -206,7 +206,7 @@ function generateRampPaths(seed: number, arenaWidth: number, arenaDepth: number)
       startZ: Math.sin(angle1) * midRadius,
       endX: Math.cos(angle2) * midRadius,
       endZ: Math.sin(angle2) * midRadius,
-      width: RAMP_WIDTH * 0.8,
+      width: RAMP_WIDTH,
     });
   }
   
@@ -482,13 +482,17 @@ export function generateTerrain(config: HeightmapConfig = ROLLING_HILLS_CONFIG):
   applyRamps(heightmap, resolution, ARENA_WIDTH, ARENA_DEPTH, ramps);
   
   // Apply smoothing pass to blend features and ramps smoothly
-  applySmoothing(heightmap, resolution, smoothness * 0.6);
+  applySmoothing(heightmap, resolution, smoothness * 1.2);
   
   // Extra smoothing specifically on ramp areas to ensure gentle slopes
   applyRampSmoothing(heightmap, resolution, ARENA_WIDTH, ARENA_DEPTH, ramps);
   
   // Additional smoothing on feature edges for natural transitions
-  applySmoothing(heightmap, resolution, smoothness * 0.3);
+  applySmoothing(heightmap, resolution, smoothness * 0.8);
+  
+  // Final global smoothing passes to eliminate any remaining ripples
+  applySmoothing(heightmap, resolution, smoothness * 0.6);
+  applySmoothing(heightmap, resolution, smoothness * 0.4);
   
   // Calculate normals
   calculateNormals(heightmap, normalmap, resolution, ARENA_WIDTH, ARENA_DEPTH);
@@ -505,7 +509,7 @@ export function generateTerrain(config: HeightmapConfig = ROLLING_HILLS_CONFIG):
 
 function applySmoothing(heightmap: Float32Array, resolution: number, smoothness: number): void {
   // Gaussian blur or averaging pass for smoother terrain
-  const iterations = Math.floor(smoothness * 5);
+  const iterations = Math.floor(smoothness * 8);
   for (let i = 0; i < iterations; i++) {
     // Simple box blur
     const temp = new Float32Array(heightmap);

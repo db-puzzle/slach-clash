@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useEffect } from 'react';
 import { RigidBody } from '@react-three/rapier';
+import { Group } from 'three';
 import { Tree } from './Trees';
 import type { TerrainData } from '@/types';
 import { getHeightAt, getSlopeAngle } from '@/game/terrain';
 import { OBSTACLE_PLACEMENT, TREE_TYPES, ARENA_WIDTH, ARENA_DEPTH } from '@/utils/constants';
+import { markAsOcclusionAware } from '@/game/systems/OcclusionSystem';
 
 interface ObstaclesProps {
   terrain: TerrainData;
@@ -21,13 +23,24 @@ interface TreeObstacle {
 }
 
 function Rock({ position, size }: { position: [number, number, number]; size: number }): React.JSX.Element {
+  const groupRef = useRef<Group>(null);
+  
+  // Mark this rock as occlusion-aware on mount
+  useEffect(() => {
+    if (groupRef.current) {
+      markAsOcclusionAware(groupRef.current);
+    }
+  }, []);
+  
   return (
-    <RigidBody type="fixed" colliders="hull" position={position}>
-      <mesh castShadow receiveShadow>
-        <dodecahedronGeometry args={[size]} />
-        <meshStandardMaterial color="#6b705c" roughness={0.9} />
-      </mesh>
-    </RigidBody>
+    <group ref={groupRef}>
+      <RigidBody type="fixed" colliders="hull" position={position}>
+        <mesh castShadow receiveShadow>
+          <dodecahedronGeometry args={[size]} />
+          <meshStandardMaterial color="#6b705c" roughness={0.9} />
+        </mesh>
+      </RigidBody>
+    </group>
   );
 }
 

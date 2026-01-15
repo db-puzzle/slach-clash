@@ -80,7 +80,7 @@ export interface DamageEvent {
 // GAME STATE TYPES
 // ============================================
 
-export type GamePhase = 'menu' | 'lobby' | 'playing' | 'spectating' | 'ended';
+export type GamePhase = 'menu' | 'lobby' | 'flyby' | 'playing' | 'spectating' | 'ended';
 
 export interface Projectile {
     id: string;
@@ -137,16 +137,47 @@ export interface LobbyState {
 // ============================================
 
 export interface InputState {
+    // Movement
     moveForward: boolean;
     moveBackward: boolean;
     moveLeft: boolean;
     moveRight: boolean;
     sprint: boolean;
+    
+    // Combat
     attack: boolean;
+    attackHeld: boolean;
     block: boolean;
+    quickShield: boolean;
+    
+    // Camera
+    targetLock: boolean;
+    resetCamera: boolean;
+    
+    // Weapons
     weaponSlot: WeaponSlot | null;
     cycleWeaponNext: boolean;
     cycleWeaponPrev: boolean;
+}
+
+// ============================================
+// CAMERA TYPES
+// ============================================
+
+export interface CameraState {
+    // Orbit camera angles (radians)
+    yaw: number;      // Horizontal rotation around player
+    pitch: number;    // Vertical angle (clamped)
+    
+    // Target lock
+    isLocked: boolean;
+    lockedTargetId: string | null;
+    
+    // Settings
+    distance: number;
+    height: number;
+    sensitivity: number;
+    invertY: boolean;
 }
 
 // ============================================
