@@ -7,6 +7,7 @@ import { PlayerModel } from './PlayerModel';
 import { useInput } from '@/hooks/useInput';
 import { useGameStore } from '@/stores/gameStore';
 import { useCameraStore } from '@/stores/cameraStore';
+import { useDebugStore } from '@/stores/debugStore';
 import { useTerrainData } from '@/game/world';
 import { getHeightAt, getNormalAt, getSlopeAngle } from '@/game/terrain';
 import { updateFallTracking } from '@/game/systems';
@@ -85,9 +86,15 @@ export function Player({
   const isLocked = useCameraStore((state) => state.isLocked);
   const lockedTargetId = useCameraStore((state) => state.lockedTargetId);
 
+  // Debug store
+  const debugEnabled = useDebugStore((state) => state.isEnabled);
+
   // Movement vectors (reused each frame)
   const moveDirection = useRef(new Vector3());
   const velocity = useRef(new Vector3());
+  
+  // Track previous position for block detection
+  const prevPosition = useRef({ x: 0, y: 0, z: 0 });
 
   // Initialize player in store
   useEffect(() => {
@@ -95,7 +102,8 @@ export function Player({
       const terrainHeight = terrain
         ? getHeightAt(terrain, startPosition[0], startPosition[2])
         : 0;
-      const startY = terrainHeight + 1;
+      // Spawn 3m above terrain to ensure player starts above the heightfield collider
+      const startY = terrainHeight + 3;
 
       useGameStore.getState().addPlayer({
         id: playerId,
@@ -342,12 +350,87 @@ export function Player({
       isSprinting: canSprint,
       isBlocking,
     });
+
+    // Update debug store if enabled
+    if (debugEnabled) {
+      const actualVel = rb.linvel();
+      
+      // Detect if movement is blocked
+      const expectedSpeed = Math.sqrt(
+        velocity.current.x * velocity.current.x + velocity.current.z * velocity.current.z
+      );
+      const actualSpeed = Math.sqrt(actualVel.x * actualVel.x + actualVel.z * actualVel.z);
+      const isBlocked = expectedSpeed > 0.1 && actualSpeed < expectedSpeed * 0.3;
+      
+      // Check horizontal displacement vs expected
+      const horizontalDisplacement = Math.sqrt(
+        Math.pow(pos.x - prevPosition.current.x, 2) +
+        Math.pow(pos.z - prevPosition.current.z, 2)
+      );
+      const expectedDisplacement = expectedSpeed * delta;
+      const displacementRatio = expectedDisplacement > 0.001 
+        ? horizontalDisplacement / expectedDisplacement 
+        : 1;
+      
+      // Determine block reason
+      let blockReason = '';
+      if (isBlocked) {
+        if (!canTraverse) {
+          blockReason = `Slope too steep (${slopeAngle.toFixed(1)}° > ${String(MAX_TRAVERSABLE_SLOPE)}°)`;
+        } else if (pos.y < 0.1 && terrainHeight < -0.1) {
+          blockReason = 'Possible Arena ground plane collision (y≈0)';
+        } else if (displacementRatio < 0.3) {
+          blockReason = 'Colliding with obstacle or terrain geometry';
+        } else {
+          blockReason = 'Unknown collision';
+        }
+      }
+
+      useDebugStore.getState().updatePlayerPhysics({
+        position: { x: pos.x, y: pos.y, z: pos.z },
+        velocity: { x: actualVel.x, y: actualVel.y, z: actualVel.z },
+        inputDirection: { x: moveDirection.current.x, z: moveDirection.current.z },
+        actualMovement: { 
+          x: (pos.x - prevPosition.current.x) / delta,
+          z: (pos.z - prevPosition.current.z) / delta,
+        },
+      });
+
+      useDebugStore.getState().updateTerrainInfo({
+        terrainHeight,
+        slopeAngle,
+        terrainNormal,
+        canTraverse,
+        isSliding: shouldSlide,
+      });
+
+      useDebugStore.getState().updateGrounding({
+        isGrounded: isOnGround,
+        distanceToGround: pos.y - terrainHeight,
+      });
+
+      useDebugStore.getState().updateCollisionInfo({
+        nearbyColliders: [], // Collider query disabled for now
+        isBlocked,
+        blockReason,
+        lastCollisionPoint: isBlocked ? { x: pos.x, y: pos.y, z: pos.z } : null,
+      });
+
+      useDebugStore.getState().updateFrameTiming({
+        lastFrameDelta: delta,
+        physicsStepsPerSecond: Math.round(1 / delta),
+      });
+      
+      // Update previous position
+      prevPosition.current = { x: pos.x, y: pos.y, z: pos.z };
+    }
   });
 
   // Calculate initial position based on terrain
+  // Add extra height (3m) to ensure player spawns above terrain even with heightfield positioning
   const initialY = terrain
-    ? getHeightAt(terrain, startPosition[0], startPosition[2]) + 1
-    : startPosition[1];
+    ? getHeightAt(terrain, startPosition[0], startPosition[2]) + 3
+    : startPosition[1] + 10;
 
   return (
     <RigidBody

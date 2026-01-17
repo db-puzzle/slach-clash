@@ -1,8 +1,9 @@
 import { useMemo, useRef } from 'react';
 import { PlaneGeometry, Mesh, Color, Float32BufferAttribute } from 'three';
-import { RigidBody } from '@react-three/rapier';
+import { RigidBody, TrimeshCollider } from '@react-three/rapier';
 import type { TerrainData } from '@/types';
 import { ARENA_WIDTH, ARENA_DEPTH, MAX_TRAVERSABLE_SLOPE, SLIDE_THRESHOLD_SLOPE } from '@/utils/constants';
+import { useDebugStore } from '@/stores/debugStore';
 
 interface TerrainMeshProps {
   terrain: TerrainData;
@@ -164,8 +165,83 @@ export function TerrainMesh({ terrain }: TerrainMeshProps): React.JSX.Element {
     return geo;
   }, [terrain]);
 
+  // Create low-resolution collision geometry for physics
+  // Using 64x64 resolution trimesh to reduce triangle edge snagging
+  const collisionGeometry = useMemo(() => {
+    const { heightmap, resolution } = terrain;
+    
+    // Lower resolution for collision - reduces snagging on triangle edges
+    const collisionRes = 64;
+    const segments = collisionRes - 1;
+    
+    const geo = new PlaneGeometry(ARENA_WIDTH, ARENA_DEPTH, segments, segments);
+    geo.rotateX(-Math.PI / 2);
+    
+    const positions = geo.attributes['position'];
+    if (!positions) return geo;
+    
+    // Sample heights from the full resolution heightmap
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      
+      // Map vertex position to heightmap index
+      const hx = Math.floor(((x / ARENA_WIDTH) + 0.5) * (resolution - 1));
+      const hz = Math.floor(((z / ARENA_DEPTH) + 0.5) * (resolution - 1));
+      
+      const clampedHx = Math.max(0, Math.min(resolution - 1, hx));
+      const clampedHz = Math.max(0, Math.min(resolution - 1, hz));
+      const index = clampedHz * resolution + clampedHx;
+      
+      const height = heightmap[index] ?? 0;
+      positions.setY(i, height);
+    }
+    
+    positions.needsUpdate = true;
+    geo.computeVertexNormals();
+    
+    return geo;
+  }, [terrain]);
+
+  // Extract vertices and indices from collision geometry for TrimeshCollider
+  const trimeshData = useMemo(() => {
+    const positions = collisionGeometry.attributes['position'];
+    const indexAttr = collisionGeometry.index;
+    
+    if (!positions || !indexAttr) {
+      return { vertices: new Float32Array(0), indices: new Uint32Array(0) };
+    }
+    
+    const vertices = new Float32Array(positions.array);
+    const indices = new Uint32Array(indexAttr.array);
+    
+    return { vertices, indices };
+  }, [collisionGeometry]);
+
+  // Get debug mode state for wireframe visibility
+  const showDebugWireframe = useDebugStore((state) => state.isEnabled);
+
   return (
-    <RigidBody type="fixed" colliders="trimesh">
+    <group>
+      {/* Low-resolution collision mesh with TrimeshCollider */}
+      <RigidBody type="fixed" colliders={false}>
+        <TrimeshCollider args={[trimeshData.vertices, trimeshData.indices]} />
+      </RigidBody>
+      
+      {/* Wireframe overlay to visualize collision mesh grid - only shown in debug mode */}
+      {showDebugWireframe && (
+        <mesh geometry={collisionGeometry} position={[0, 0.15, 0]}>
+          <meshBasicMaterial 
+            color="#ff0000" 
+            wireframe={true} 
+            transparent={true}
+            opacity={0.8}
+            depthTest={false}
+          />
+        </mesh>
+      )}
+      
+      {/* High-resolution visual mesh */}
       <mesh 
         ref={meshRef} 
         geometry={geometry} 
@@ -179,6 +255,6 @@ export function TerrainMesh({ terrain }: TerrainMeshProps): React.JSX.Element {
           flatShading={false}
         />
       </mesh>
-    </RigidBody>
+    </group>
   );
 }

@@ -7,6 +7,7 @@ import { Player, FollowCamera, FlybyCamera } from '@/game/entities';
 import { OcclusionSystem } from '@/game/systems';
 import { useGameStore } from '@/stores/gameStore';
 import { ROLLING_HILLS_CONFIG } from '@/utils/constants';
+import { DebugPanel } from '@/components/DebugPanel';
 
 function GameScene(): React.JSX.Element {
   const localPlayerId = useGameStore((state) => state.localPlayerId);
@@ -338,6 +339,7 @@ function App(): React.JSX.Element {
         <HUD />
         <TerrainLegend />
         <TargetLockIndicator />
+        <DebugPanel />
       </div>
       
       {/* Flyby overlay (has pointer-events for skip button) */}
